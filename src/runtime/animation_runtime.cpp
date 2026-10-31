@@ -676,7 +676,7 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
     }
     if (name == "array") {
         require(1);
-        const float requestedLength = std::floor(arg(0));
+        const float requestedLength = std::std::floor(arg(0));
         const int length = static_cast<int>(std::max(0.0f, std::min(
             static_cast<float>(config::MAX_ARRAY_LENGTH), requestedLength)));
         const float initial = arg(1);
@@ -690,11 +690,11 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
     }
     if (name == "hsv") {
         require(3);
-        const float h = std::fmod(std::fmod(arg(0), 1.0f) + 1.0f, 1.0f);
+        const float h = std::std::fmod(std::std::fmod(arg(0), 1.0f) + 1.0f, 1.0f);
         const float s = arg(1);
         const float v = arg(2);
         const auto channel = [h, s, v](float n) {
-            const float k = std::fmod(n + h * 6.0f, 6.0f);
+            const float k = std::std::fmod(n + h * 6.0f, 6.0f);
             return v - v * s * std::max(0.0f, std::min(std::min(k, 4.0f - k), 1.0f));
         };
         return Value::fromColor(channel(5), channel(3), channel(1));
@@ -798,17 +798,12 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         require(1);
         const float x = arg(0);
         const float y = arg(1);
-        const float floorX = floor(x);
-        const float floorY = floor(y);
+        const float floorX = std::floor(x);
+        const float floorY = std::floor(y);
         const auto toUint32 = [](float value) {
             if (!std::isfinite(value)) return uint32_t{0};
-            const float truncated = trunc(value);
-            const float int64Limit = std::ldexp(1.0f, 63);
-            if (truncated >= -int64Limit && truncated < int64Limit) {
-                return static_cast<uint32_t>(static_cast<int64_t>(truncated));
-            }
-            float wrapped = fmod(truncated, 4294967296.0f);
-            if (wrapped < 0) wrapped += 4294967296.0f;
+            float wrapped = std::std::fmod(std::std::trunc(value), 4294967296.0f);
+            if (wrapped < 0.0f) wrapped += 4294967296.0f;
             return static_cast<uint32_t>(wrapped);
         };
         const uint32_t ix = toUint32(floorX);
@@ -832,23 +827,23 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
     }
 
     require(1);
-    if (name == "sin") return Value::fromNumber(sin(arg(0)));
-    if (name == "cos") return Value::fromNumber(cos(arg(0)));
-    if (name == "tan") return Value::fromNumber(tan(arg(0)));
-    if (name == "abs") return Value::fromNumber(fabs(arg(0)));
-    if (name == "sqrt") return Value::fromNumber(sqrt(arg(0)));
-    if (name == "floor") return Value::fromNumber(floor(arg(0)));
-    if (name == "ceil") return Value::fromNumber(ceil(arg(0)));
-    if (name == "round") return Value::fromNumber(round(arg(0)));
-    if (name == "exp") return Value::fromNumber(exp(arg(0)));
-    if (name == "log") return Value::fromNumber(log(arg(0)));
+    if (name == "sin") return Value::fromNumber(std::sin(arg(0)));
+    if (name == "cos") return Value::fromNumber(std::cos(arg(0)));
+    if (name == "tan") return Value::fromNumber(std::tan(arg(0)));
+    if (name == "abs") return Value::fromNumber(std::fabs(arg(0)));
+    if (name == "sqrt") return Value::fromNumber(std::sqrt(arg(0)));
+    if (name == "floor") return Value::fromNumber(std::floor(arg(0)));
+    if (name == "ceil") return Value::fromNumber(std::ceil(arg(0)));
+    if (name == "round") return Value::fromNumber(std::round(arg(0)));
+    if (name == "exp") return Value::fromNumber(std::exp(arg(0)));
+    if (name == "log") return Value::fromNumber(std::log(arg(0)));
     if (name == "pow") {
         require(2);
-        return Value::fromNumber(pow(arg(0), arg(1)));
+        return Value::fromNumber(std::pow(arg(0), arg(1)));
     }
     if (name == "atan2") {
         require(2);
-        return Value::fromNumber(atan2(arg(0), arg(1)));
+        return Value::fromNumber(std::atan2(arg(0), arg(1)));
     }
     if (name == "min" || name == "max") {
         float result = arg(0);
@@ -857,7 +852,7 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         }
         return Value::fromNumber(result);
     }
-    if (name == "fract") return Value::fromNumber(arg(0) - floor(arg(0)));
+    if (name == "fract") return Value::fromNumber(arg(0) - std::floor(arg(0)));
     if (name == "clamp") {
         require(3);
         return Value::fromNumber(std::max(arg(1), std::min(arg(2), arg(0))));
@@ -910,8 +905,8 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
             if (node.text == "-") return Value::fromNumber(a - b);
             if (node.text == "*") return Value::fromNumber(a * b);
             if (node.text == "/") return Value::fromNumber(b == 0 ? 0 : a / b);
-            if (node.text == "%") return Value::fromNumber(b == 0 ? 0 : fmod(a, b));
-            if (node.text == "^") return Value::fromNumber(pow(a, b));
+            if (node.text == "%") return Value::fromNumber(b == 0 ? 0 : std::fmod(a, b));
+            if (node.text == "^") return Value::fromNumber(std::pow(a, b));
             if (node.text == "<") return Value::fromBoolean(a < b);
             if (node.text == ">") return Value::fromBoolean(a > b);
             if (node.text == "<=") return Value::fromBoolean(a <= b);
@@ -937,7 +932,7 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
         }
         case Node::Kind::Index: {
             const Value base = evaluate(*node.children[0], environment, budget);
-            const float indexValue = floor(numberOf(evaluate(*node.children[1], environment, budget)));
+            const float indexValue = std::floor(numberOf(evaluate(*node.children[1], environment, budget)));
             if (base.kind == Value::Kind::Color) {
                 if (!std::isfinite(indexValue) || indexValue < 0 || indexValue >= 3) {
                     return Value::fromNumber(0);
@@ -1030,7 +1025,7 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
             }
             if (target.kind == Node::Kind::Index) {
                 const Value base = evaluate(*target.children[0], environment, budget);
-                const float indexValue = floor(numberOf(
+                const float indexValue = std::floor(numberOf(
                     evaluate(*target.children[1], environment, budget)));
                 if (!std::isfinite(indexValue) || indexValue < 0 ||
                     indexValue > static_cast<float>(std::numeric_limits<int>::max())) {
