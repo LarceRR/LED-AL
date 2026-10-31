@@ -1179,7 +1179,7 @@ bool AnimationRuntime::renderFrame(float dt, std::array<Rgb, config::LED_COUNT>&
     }
     const uint32_t started = micros();
     const uint32_t deadline = started + config::MAX_FRAME_TIME_US;
-    std::array<Rgb, config::LED_COUNT> frame{};
+    workingFrame_.fill(Rgb{});
     simulationTime_ += std::max(0.0f, std::min(dt, 0.05f)) * timeScale_;
     Budget budget{config::MAX_INSTRUCTIONS_PER_FRAME, deadline};
     try {
@@ -1220,9 +1220,9 @@ bool AnimationRuntime::renderFrame(float dt, std::array<Rgb, config::LED_COUNT>&
                                          : numberOf(arrayElement(result.value, index));
                 return static_cast<float>(std::isfinite(value) ? clamped(value, 0, 1) : 0);
             };
-            frame[i] = Rgb{channel(0), channel(1), channel(2)};
+            workingFrame_[i] = Rgb{channel(0), channel(1), channel(2)};
         }
-        output = frame;
+        output = workingFrame_;
         ++frameCount_;
         lastComputeTimeUs_ = micros() - started;
         return true;
