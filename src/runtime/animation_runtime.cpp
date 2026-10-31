@@ -22,7 +22,7 @@ enum class TokenKind : uint8_t { Number, String, Identifier, Operator, End };
 struct Token {
     TokenKind kind = TokenKind::End;
     std::string text;
-    double number = 0;
+    float number = 0;
     uint16_t line = 1;
     uint16_t column = 1;
 };
@@ -42,14 +42,14 @@ using Array = std::vector<Value>;
 struct Value {
     enum class Kind : uint8_t { Number, Boolean, String, Array, Color };
     Kind kind = Kind::Number;
-    double number = 0;
+    float number = 0;
     bool boolean = false;
-    bool float32Array = false;
     std::string string;
     std::shared_ptr<Array> array;
-    double color[3] = {0, 0, 0};
+    std::shared_ptr<std::vector<float>> numericArray;
+    float color[3] = {0, 0, 0};
 
-    static Value fromNumber(double value) {
+    static Value fromNumber(float value) {
         Value result;
         result.number = value;
         return result;
@@ -66,14 +66,19 @@ struct Value {
         result.string = std::move(value);
         return result;
     }
-    static Value fromArray(Array value, bool float32 = false) {
+    static Value fromArray(Array value) {
         Value result;
         result.kind = Kind::Array;
         result.array = std::make_shared<Array>(std::move(value));
-        result.float32Array = float32;
         return result;
     }
-    static Value fromColor(double red, double green, double blue) {
+    static Value fromNumericArray(size_t length, float initial) {
+        Value result;
+        result.kind = Kind::Array;
+        result.numericArray = std::make_shared<std::vector<float>>(length, initial);
+        return result;
+    }
+    static Value fromColor(float red, float green, float blue) {
         Value result;
         result.kind = Kind::Color;
         result.color[0] = red;
@@ -143,11 +148,33 @@ struct Workspace {
     }
 };
 
-double numberOf(const Value& value) {
+float numberOf(const Value& value) {
     if (value.kind == Value::Kind::Boolean) return value.boolean ? 1 : 0;
     if (value.kind == Value::Kind::Number) return value.number;
-    if (value.kind == Value::Kind::String) return strtod(value.string.c_str(), nullptr);
+    if (value.kind == Value::Kind::String) return strtof(value.string.c_str(), nullptr);
     return 0;
+}
+
+bool isArrayValue(const Value& value) {
+    return value.kind == Value::Kind::Array && (value.array || value.numericArray);
+}
+
+size_t arrayLength(const Value& value) {
+    if (value.numericArray) return value.numericArray->size();
+    return value.array ? value.array->size() : 0;
+}
+
+Value arrayElement(const Value& value, size_t index) {
+    if (value.numericArray) return Value::fromNumber((*value.numericArray)[index]);
+    return (*value.array)[index];
+}
+
+void setArrayElement(Value& value, size_t index, const Value& element) {
+    if (value.numericArray) {
+        (*value.numericArray)[index] = numberOf(element);
+    } else {
+        (*value.array)[index] = element;
+    }
 }
 
 bool truthy(const Value& value) {
@@ -167,14 +194,17 @@ struct Node {
         Assign, If, For, Literal, Variable, Array, Unary, Binary,
         Conditional, Call, Index
     };
+    enum class LiteralKind : uint8_t { Number, String, Boolean };
     explicit Node(Kind kind, const Token& token = Token{})
         : kind(kind), location{token.line, token.column} {}
     Kind kind;
+    LiteralKind literalKind = LiteralKind::Number;
     SourceLocation location;
+    float number = 0.0f;
+    bool boolean = false;
+    char operation = 0;
     std::string text;
     std::string auxiliary;
-    std::string operation;
-    Value literal;
     std::vector<std::unique_ptr<Node>> children;
 };
 
@@ -284,7 +314,7 @@ private:
             while (isDigit(peek(0))) advance();
         }
         const std::string text = source_.substr(start, position_ - start);
-        return Token{TokenKind::Number, text, strtod(text.c_str(), nullptr), line, column};
+        return Token{TokenKind::Number, text, strtof(text.c_str(), nullptr), line, column};
     }
     Token readIdentifier(uint16_t line, uint16_t column) {
         const size_t start = position_;
@@ -460,7 +490,7 @@ private:
         expect(";");
         node->auxiliary = expectKind(TokenKind::Identifier, "Expected loop step variable").text;
         if (!check("+=") && !check("-=")) fail(peek(), "For loops support only += and -=");
-        node->operation = tokens_[position_++].text;
+        node->operation = tokens_[position_++].text[0];
         node->children.push_back(expression());
         expect(")");
         node->children.push_back(block());
@@ -510,13 +540,16 @@ private:
         NodePtr node;
         if (token.kind == TokenKind::Number) {
             node = make(Node::Kind::Literal, token);
-            node->literal = Value::fromNumber(token.number);
+            node->literalKind = Node::LiteralKind::Number;
+            node->number = token.number;
         } else if (token.kind == TokenKind::String) {
             node = make(Node::Kind::Literal, token);
-            node->literal = Value::fromString(token.text);
+            node->literalKind = Node::LiteralKind::String;
+            node->text = token.text;
         } else if (token.text == "true" || token.text == "false") {
             node = make(Node::Kind::Literal, token);
-            node->literal = Value::fromBoolean(token.text == "true");
+            node->literalKind = Node::LiteralKind::Boolean;
+            node->boolean = token.text == "true";
         } else if (token.text == "-" || token.text == "!") {
             node = make(Node::Kind::Unary, token);
             node->text = token.text;
@@ -573,7 +606,7 @@ private:
 struct Environment {
     const std::unordered_map<std::string, Value>& state;
     Workspace& workspace;
-    double time = 0;
+    float time = 0;
 };
 
 struct Budget {
@@ -596,7 +629,7 @@ struct Budget {
 Value resolveVariable(const std::string& name, Environment& environment,
                       SourceLocation location) {
     if (name == "time") return Value::fromNumber(environment.time);
-    if (name == "PI") return Value::fromNumber(M_PI);
+    if (name == "PI") return Value::fromNumber(3.14159265358979323846f);
     const Value* local = environment.workspace.findLocal(name);
     if (local) return *local;
     auto state = environment.state.find(name);
@@ -617,13 +650,13 @@ Value numericOrStringPlus(const Value& a, const Value& b) {
     return Value::fromNumber(numberOf(a) + numberOf(b));
 }
 
-double clamped(double value, double minimum, double maximum) {
+float clamped(float value, float minimum, float maximum) {
     return std::max(minimum, std::min(maximum, value));
 }
 
 Value callBuiltin(const std::string& name, const Value* args, size_t count,
                   SourceLocation location) {
-    const auto arg = [args, count](size_t index, double fallback = 0.0) {
+    const auto arg = [args, count](size_t index, float fallback = 0.0f) {
         return index < count ? numberOf(args[index]) : fallback;
     };
     const auto require = [count, location, &name](size_t required) {
@@ -634,22 +667,20 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         }
     };
     if (name == "random") {
-        return Value::fromNumber(static_cast<double>(esp_random()) / UINT32_MAX);
+        return Value::fromNumber(static_cast<float>(esp_random()) / UINT32_MAX);
     }
     if (name == "randomRange") {
         require(2);
         return Value::fromNumber(arg(0) + (arg(1) - arg(0)) *
-                                 (static_cast<double>(esp_random()) / UINT32_MAX));
+                                 (static_cast<float>(esp_random()) / UINT32_MAX));
     }
     if (name == "array") {
         require(1);
-        const double requestedLength = std::floor(arg(0));
-        const int length = static_cast<int>(std::max(0.0, std::min(
-            static_cast<double>(config::MAX_ARRAY_LENGTH), requestedLength)));
-        const double initial = arg(1);
-        Array values(static_cast<size_t>(length));
-        for (Value& value : values) value = Value::fromNumber(static_cast<float>(initial));
-        return Value::fromArray(std::move(values), true);
+        const float requestedLength = std::floor(arg(0));
+        const int length = static_cast<int>(std::max(0.0f, std::min(
+            static_cast<float>(config::MAX_ARRAY_LENGTH), requestedLength)));
+        const float initial = arg(1);
+        return Value::fromNumericArray(static_cast<size_t>(length), initial);
     }
     if (name == "rgb") {
         require(3);
@@ -659,19 +690,19 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
     }
     if (name == "hsv") {
         require(3);
-        const double h = std::fmod(std::fmod(arg(0), 1.0) + 1.0, 1.0);
-        const double s = arg(1);
-        const double v = arg(2);
-        const auto channel = [h, s, v](double n) {
-            const double k = std::fmod(n + h * 6.0, 6.0);
-            return v - v * s * std::max(0.0, std::min(std::min(k, 4.0 - k), 1.0));
+        const float h = std::fmod(std::fmod(arg(0), 1.0f) + 1.0f, 1.0f);
+        const float s = arg(1);
+        const float v = arg(2);
+        const auto channel = [h, s, v](float n) {
+            const float k = std::fmod(n + h * 6.0f, 6.0f);
+            return v - v * s * std::max(0.0f, std::min(std::min(k, 4.0f - k), 1.0f));
         };
         return Value::fromColor(channel(5), channel(3), channel(1));
     }
     if (name == "mix") {
         require(3);
         if (args[0].kind == Value::Kind::Color && args[1].kind == Value::Kind::Color) {
-            const double amount = arg(2);
+            const float amount = arg(2);
             return Value::fromColor(
                 args[0].color[0] + (args[1].color[0] - args[0].color[0]) * amount,
                 args[0].color[1] + (args[1].color[1] - args[0].color[1]) * amount,
@@ -679,22 +710,22 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         }
         const auto colorOrArray = [](const Value& value) {
             return value.kind == Value::Kind::Color ||
-                   (value.kind == Value::Kind::Array && value.array);
+                   (value.kind == Value::Kind::Array && (value.array || value.numericArray));
         };
         if (colorOrArray(args[0]) && colorOrArray(args[1])) {
             Array result;
             const auto lengthOf = [](const Value& value) {
-                return value.kind == Value::Kind::Color ? size_t{3} : value.array->size();
+                return value.kind == Value::Kind::Color ? size_t{3} : arrayLength(value);
             };
             const auto channelOf = [](const Value& value, size_t index) {
                 return value.kind == Value::Kind::Color
                            ? value.color[index]
-                           : numberOf((*value.array)[index]);
+                           : numberOf(arrayElement(value, index));
             };
             const size_t length = std::min(lengthOf(args[0]), lengthOf(args[1]));
             result.reserve(length);
             for (size_t i = 0; i < length; ++i) {
-                const double a = channelOf(args[0], i);
+                const float a = channelOf(args[0], i);
                 result.push_back(Value::fromNumber(a + (channelOf(args[1], i) - a) * arg(2)));
             }
             if (args[0].kind == Value::Kind::Color && args[1].kind == Value::Kind::Color) {
@@ -709,15 +740,15 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         if (args[1].kind != Value::Kind::Array || !args[1].array || args[1].array->empty()) {
             return Value::fromArray({Value::fromNumber(0), Value::fromNumber(0), Value::fromNumber(0)});
         }
-        const double position = arg(0);
+        const float position = arg(0);
         const auto stopValue = [](const Value& stop, size_t index) -> const Value* {
             if (stop.kind != Value::Kind::Array || !stop.array || stop.array->size() <= index) return nullptr;
             return &(*stop.array)[index];
         };
         size_t firstIndex = 0;
         size_t lastIndex = 0;
-        double firstPosition = std::numeric_limits<double>::infinity();
-        double lastPosition = -std::numeric_limits<double>::infinity();
+        float firstPosition = std::numeric_limits<float>::infinity();
+        float lastPosition = -std::numeric_limits<float>::infinity();
         for (size_t i = 0; i < args[1].array->size(); ++i) {
             const Value* stop = &(*args[1].array)[i];
             const Value* stopPosition = stopValue(*stop, 0);
@@ -725,7 +756,7 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
                 throw SourceError("TYPE_ERROR", "Invalid gradient stop",
                                   location.line, location.column);
             }
-            const double value = numberOf(*stopPosition);
+            const float value = numberOf(*stopPosition);
             if (value < firstPosition) {
                 firstPosition = value;
                 firstIndex = i;
@@ -743,10 +774,10 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         const Value* leftColor = stopValue(*leftPosition, 1);
         const Value* rightPosition = nullptr;
         const Value* rightColor = nullptr;
-        double lower = firstPosition;
-        double upper = lastPosition;
+        float lower = firstPosition;
+        float upper = lastPosition;
         for (const Value& stop : *args[1].array) {
-            const double value = numberOf(*stopValue(stop, 0));
+            const float value = numberOf(*stopValue(stop, 0));
             if (value > firstPosition && value <= position && value >= lower) {
                 lower = value;
                 leftColor = stopValue(stop, 1);
@@ -758,44 +789,44 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
             }
         }
         if (!rightPosition || !rightColor || !leftColor) return *stopValue(last, 1);
-        const double span = upper - lower;
-        const double amount = span == 0 ? 0 : (position - lower) / span;
+        const float span = upper - lower;
+        const float amount = span == 0 ? 0 : (position - lower) / span;
         const Value mixArgs[] = {*leftColor, *rightColor, Value::fromNumber(amount)};
         return callBuiltin("mix", mixArgs, 3, location);
     }
     if (name == "noise") {
         require(1);
-        const double x = arg(0);
-        const double y = arg(1);
-        const double floorX = floor(x);
-        const double floorY = floor(y);
-        const auto toUint32 = [](double value) {
+        const float x = arg(0);
+        const float y = arg(1);
+        const float floorX = floor(x);
+        const float floorY = floor(y);
+        const auto toUint32 = [](float value) {
             if (!std::isfinite(value)) return uint32_t{0};
-            const double truncated = trunc(value);
-            const double int64Limit = std::ldexp(1.0, 63);
+            const float truncated = trunc(value);
+            const float int64Limit = std::ldexp(1.0f, 63);
             if (truncated >= -int64Limit && truncated < int64Limit) {
                 return static_cast<uint32_t>(static_cast<int64_t>(truncated));
             }
-            double wrapped = fmod(truncated, 4294967296.0);
-            if (wrapped < 0) wrapped += 4294967296.0;
+            float wrapped = fmod(truncated, 4294967296.0f);
+            if (wrapped < 0) wrapped += 4294967296.0f;
             return static_cast<uint32_t>(wrapped);
         };
         const uint32_t ix = toUint32(floorX);
         const uint32_t iy = toUint32(floorY);
-        const double fx = x - floorX;
-        const double fy = y - floorY;
+        const float fx = x - floorX;
+        const float fy = y - floorY;
         const auto hash = [](uint32_t a, uint32_t b) {
             uint32_t n = a * 374761393U + b * 668265263U;
             n = (n ^ (n >> 13U)) * 1274126177U;
-            return static_cast<double>(n ^ (n >> 16U)) / 4294967295.0;
+            return static_cast<float>(n ^ (n >> 16U)) / 4294967295.0f;
         };
-        const auto fade = [](double value) { return value * value * (3 - 2 * value); };
-        const double a = hash(ix, iy);
-        const double b = hash(ix + 1U, iy);
-        const double c = hash(ix, iy + 1U);
-        const double d = hash(ix + 1U, iy + 1U);
-        const double u = fade(fx);
-        const double v = fade(fy);
+        const auto fade = [](float value) { return value * value * (3 - 2 * value); };
+        const float a = hash(ix, iy);
+        const float b = hash(ix + 1U, iy);
+        const float c = hash(ix, iy + 1U);
+        const float d = hash(ix + 1U, iy + 1U);
+        const float u = fade(fx);
+        const float v = fade(fy);
         return Value::fromNumber((a + (b - a) * u) * (1 - v) +
                                  (c + (d - c) * u) * v);
     }
@@ -820,7 +851,7 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         return Value::fromNumber(atan2(arg(0), arg(1)));
     }
     if (name == "min" || name == "max") {
-        double result = arg(0);
+        float result = arg(0);
         for (size_t i = 1; i < count; ++i) {
             result = name == "min" ? std::min(result, arg(i)) : std::max(result, arg(i));
         }
@@ -837,8 +868,8 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
     }
     if (name == "smoothstep") {
         require(3);
-        const double span = arg(1) - arg(0);
-        const double t = span == 0 ? 0 : clamped((arg(2) - arg(0)) / span, 0, 1);
+        const float span = arg(1) - arg(0);
+        const float t = span == 0 ? 0 : clamped((arg(2) - arg(0)) / span, 0, 1);
         return Value::fromNumber(t * t * (3 - 2 * t));
     }
     throw SourceError("UNKNOWN_FUNCTION", "Unknown function: " + name,
@@ -848,7 +879,10 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
 Value evaluate(const Node& node, Environment& environment, Budget& budget) {
     budget.consume(node.location);
     switch (node.kind) {
-        case Node::Kind::Literal: return node.literal;
+        case Node::Kind::Literal:
+            if (node.literalKind == Node::LiteralKind::String) return Value::fromString(node.text);
+            if (node.literalKind == Node::LiteralKind::Boolean) return Value::fromBoolean(node.boolean);
+            return Value::fromNumber(node.number);
         case Node::Kind::Variable: return resolveVariable(node.text, environment, node.location);
         case Node::Kind::Array: {
             Array values;
@@ -867,9 +901,11 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
         }
         case Node::Kind::Binary: {
             const Value left = evaluate(*node.children[0], environment, budget);
+            if (node.text == "&&" && !truthy(left)) return Value::fromBoolean(false);
+            if (node.text == "||" && truthy(left)) return Value::fromBoolean(true);
             const Value right = evaluate(*node.children[1], environment, budget);
-            const double a = numberOf(left);
-            const double b = numberOf(right);
+            const float a = numberOf(left);
+            const float b = numberOf(right);
             if (node.text == "+") return numericOrStringPlus(left, right);
             if (node.text == "-") return Value::fromNumber(a - b);
             if (node.text == "*") return Value::fromNumber(a * b);
@@ -890,7 +926,8 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
                         equal = left.color[0] == right.color[0] &&
                                 left.color[1] == right.color[1] &&
                                 left.color[2] == right.color[2];
-                    } else equal = left.array == right.array;
+                    } else equal = left.array == right.array &&
+                                  left.numericArray == right.numericArray;
                 }
                 return Value::fromBoolean(node.text == "==" ? equal : !equal);
             }
@@ -900,7 +937,7 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
         }
         case Node::Kind::Index: {
             const Value base = evaluate(*node.children[0], environment, budget);
-            const double indexValue = floor(numberOf(evaluate(*node.children[1], environment, budget)));
+            const float indexValue = floor(numberOf(evaluate(*node.children[1], environment, budget)));
             if (base.kind == Value::Kind::Color) {
                 if (!std::isfinite(indexValue) || indexValue < 0 || indexValue >= 3) {
                     return Value::fromNumber(0);
@@ -908,13 +945,13 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
                 return Value::fromNumber(base.color[static_cast<size_t>(indexValue)]);
             }
             if (!std::isfinite(indexValue) || indexValue < 0 ||
-                indexValue > static_cast<double>(std::numeric_limits<int>::max())) {
+                indexValue > static_cast<float>(std::numeric_limits<int>::max())) {
                 return Value::fromNumber(0);
             }
             const int index = static_cast<int>(indexValue);
-            if (base.kind != Value::Kind::Array || !base.array || index < 0 ||
-                static_cast<size_t>(index) >= base.array->size()) return Value::fromNumber(0);
-            return (*base.array)[static_cast<size_t>(index)];
+            if (!isArrayValue(base) || index < 0 ||
+                static_cast<size_t>(index) >= arrayLength(base)) return Value::fromNumber(0);
+            return arrayElement(base, static_cast<size_t>(index));
         }
         case Node::Kind::Call: {
             if (node.children.size() > environment.workspace.arguments.size()) {
@@ -946,8 +983,8 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
 Value applyAssignment(const std::string& operation, const Value& previous, const Value& value) {
     if (operation == "=") return value;
     if (operation == "+=") return numericOrStringPlus(previous, value);
-    const double left = numberOf(previous);
-    const double right = numberOf(value);
+    const float left = numberOf(previous);
+    const float right = numberOf(value);
     if (operation == "-=") return Value::fromNumber(left - right);
     if (operation == "*=") return Value::fromNumber(left * right);
     if (operation == "/=") return Value::fromNumber(right == 0 ? 0 : left / right);
@@ -993,24 +1030,21 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
             }
             if (target.kind == Node::Kind::Index) {
                 const Value base = evaluate(*target.children[0], environment, budget);
-                const double indexValue = floor(numberOf(
+                const float indexValue = floor(numberOf(
                     evaluate(*target.children[1], environment, budget)));
                 if (!std::isfinite(indexValue) || indexValue < 0 ||
-                    indexValue > static_cast<double>(std::numeric_limits<int>::max())) {
+                    indexValue > static_cast<float>(std::numeric_limits<int>::max())) {
                     throw SourceError("ARRAY_BOUNDS", "Array index out of bounds",
                                           target.location.line, target.location.column);
                 }
                 const int index = static_cast<int>(indexValue);
-                if (base.kind != Value::Kind::Array || !base.array || index < 0 ||
-                    static_cast<size_t>(index) >= base.array->size()) {
+                if (!isArrayValue(base) || index < 0 ||
+                    static_cast<size_t>(index) >= arrayLength(base)) {
                     throw SourceError("ARRAY_BOUNDS", "Array index out of bounds",
                                       target.location.line, target.location.column);
                 }
-                Value result = applyAssignment(node.text, (*base.array)[index], value);
-                if (base.float32Array && result.kind == Value::Kind::Number) {
-                    result = Value::fromNumber(static_cast<float>(numberOf(result)));
-                }
-                (*base.array)[static_cast<size_t>(index)] = result;
+                Value result = applyAssignment(node.text, arrayElement(base, static_cast<size_t>(index)), value);
+                setArrayElement(base, static_cast<size_t>(index), result);
                 return {};
             }
             throw SourceError("INVALID_ASSIGNMENT", "Invalid assignment target",
@@ -1034,7 +1068,7 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
                 const Value oldValue = resolveVariable(node.auxiliary, environment, node.location);
                 const Value step = evaluate(*node.children[2], environment, budget);
                 environment.workspace.setLocal(node.auxiliary,
-                    applyAssignment(node.operation, oldValue, step), node.location);
+                    applyAssignment(node.operation == '+' ? "+=" : "-=", oldValue, step), node.location);
             }
             return {};
         }
@@ -1181,15 +1215,14 @@ bool AnimationRuntime::renderFrame(float dt, std::array<Rgb, config::LED_COUNT>&
             ExecResult result = execute(*active_->render->children[0], environment, budget);
             if (!result.returned ||
                 !(result.value.kind == Value::Kind::Color ||
-                  (result.value.kind == Value::Kind::Array && result.value.array &&
-                   result.value.array->size() >= 3))) {
+                  (isArrayValue(result.value) && arrayLength(result.value) >= 3))) {
                 throw SourceError("INVALID_COLOR", "render(i) must return rgb(...) or hsv(...)",
                                   active_->render->location.line, active_->render->location.column);
             }
             const auto channel = [&result](size_t index) {
-                const double value = result.value.kind == Value::Kind::Color
+                const float value = result.value.kind == Value::Kind::Color
                                          ? result.value.color[index]
-                                         : numberOf((*result.value.array)[index]);
+                                         : numberOf(arrayElement(result.value, index));
                 return static_cast<float>(std::isfinite(value) ? clamped(value, 0, 1) : 0);
             };
             frame[i] = Rgb{channel(0), channel(1), channel(2)};
