@@ -191,13 +191,21 @@ void setup() {
                   static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
     WiFi.onEvent(onWifiEvent);
 
+    Serial.println("{\"level\":\"info\",\"component\":\"led\",\"event\":\"output_init_begin\"}");
+    Serial.flush();
     if (!leds.begin()) {
         logLine("error", "LED driver initialization failed");
     } else {
         logLine("info", "WS2812B output initialized black");
     }
+    Serial.println("{\"level\":\"info\",\"component\":\"led\",\"event\":\"output_init_complete\"}");
+    Serial.flush();
 
+    Serial.println("{\"level\":\"info\",\"component\":\"wifi\",\"event\":\"credentials_load_begin\"}");
+    Serial.flush();
     loadWifiCredentials();
+    Serial.println("{\"level\":\"info\",\"component\":\"wifi\",\"event\":\"credentials_load_complete\"}");
+    Serial.flush();
     if (!wifiManager.begin()) {
         logLine("error", "Wi-Fi manager initialization failed");
     }
