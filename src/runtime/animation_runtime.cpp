@@ -314,8 +314,8 @@ private:
             }
             while (isDigit(peek(0))) advance();
         }
-        const std::string text = source_.substr(start, position_ - start);
-        return Token{TokenKind::Number, text, strtof(text.c_str(), nullptr), line, column};
+        const float value = strtof(source_.c_str() + start, nullptr);
+        return Token{TokenKind::Number, "", value, line, column};
     }
     Token readIdentifier(uint16_t line, uint16_t column) {
         const size_t start = position_;
