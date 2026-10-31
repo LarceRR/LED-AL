@@ -143,51 +143,41 @@ struct SourceLocation {
     uint16_t column = 1;
 };
 
+constexpr uint16_t INVALID_LOCAL_SLOT = std::numeric_limits<uint16_t>::max();
+
 struct LocalEntry {
-    const std::string* name = nullptr;
     Value value;
+    uint32_t generation = 0;
 };
 
 struct Workspace {
     std::array<LocalEntry, config::MAX_RUNTIME_LOCALS> locals{};
     std::array<Value, config::MAX_BUILTIN_ARGUMENTS> arguments{};
-    size_t localCount = 0;
     size_t argumentTop = 0;
+    uint32_t generation = 0;
 
-    // Locals never escape a single update() or render(i) invocation.
+    // Static local slots remove linear string lookups from render(i).
     void beginScope() {
-        localCount = 0;
+        ++generation;
+        if (generation == 0) {
+            for (LocalEntry& entry : locals) entry.generation = 0;
+            generation = 1;
+        }
         argumentTop = 0;
     }
-    Value* findLocal(const std::string& name) {
-        for (size_t i = 0; i < localCount; ++i) {
-            LocalEntry& entry = locals[i];
-            if (entry.name && *entry.name == name) return &entry.value;
-        }
-        return nullptr;
+    const Value* findLocal(uint16_t slot) const {
+        if (slot == INVALID_LOCAL_SLOT || slot >= locals.size()) return nullptr;
+        const LocalEntry& entry = locals[slot];
+        return entry.generation == generation ? &entry.value : nullptr;
     }
-    const Value* findLocal(const std::string& name) const {
-        for (size_t i = 0; i < localCount; ++i) {
-            const LocalEntry& entry = locals[i];
-            if (entry.name && *entry.name == name) return &entry.value;
-        }
-        return nullptr;
-    }
-    void setLocal(const std::string& name, Value value, SourceLocation location) {
-        for (size_t i = 0; i < localCount; ++i) {
-            LocalEntry& entry = locals[i];
-            if (entry.name && *entry.name == name) {
-                entry.value = std::move(value);
-                return;
-            }
-        }
-        if (localCount >= locals.size()) {
-            throw SourceError("LOCAL_LIMIT", "Runtime local variable limit exceeded",
+    void setLocal(uint16_t slot, Value value, SourceLocation location) {
+        if (slot == INVALID_LOCAL_SLOT || slot >= locals.size()) {
+            throw SourceError("LOCAL_LIMIT", "Invalid or excessive local variable slot",
                               location.line, location.column);
         }
-        LocalEntry& entry = locals[localCount++];
-        entry.name = &name;
+        LocalEntry& entry = locals[slot];
         entry.value = std::move(value);
+        entry.generation = generation;
     }
 };
 
@@ -248,12 +238,45 @@ struct Node {
     char operation = 0;
     BuiltinId builtin = BuiltinId::Unknown;
     BinaryOp binaryOp = BinaryOp::Unknown;
+    uint16_t localSlot = INVALID_LOCAL_SLOT;
+    uint16_t auxiliarySlot = INVALID_LOCAL_SLOT;
     std::string text;
     std::string auxiliary;
     std::vector<std::unique_ptr<Node>> children;
 };
 
 using NodePtr = std::unique_ptr<Node>;
+using LocalSlotMap = std::unordered_map<std::string, uint16_t>;
+
+uint16_t getLocalSlot(const std::string& name, LocalSlotMap& slots,
+                      SourceLocation location) {
+    const auto existing = slots.find(name);
+    if (existing != slots.end()) return existing->second;
+    if (slots.size() >= config::MAX_RUNTIME_LOCALS) {
+        throw SourceError("LOCAL_LIMIT", "Runtime local variable limit exceeded",
+                          location.line, location.column);
+    }
+    const uint16_t slot = static_cast<uint16_t>(slots.size());
+    slots.emplace(name, slot);
+    return slot;
+}
+
+void assignLocalSlots(Node& node, LocalSlotMap& slots) {
+    if (node.kind == Node::Kind::Variable || node.kind == Node::Kind::Let) {
+        node.localSlot = getLocalSlot(node.text, slots, node.location);
+    } else if (node.kind == Node::Kind::For) {
+        node.localSlot = getLocalSlot(node.text, slots, node.location);
+        node.auxiliarySlot = getLocalSlot(node.auxiliary, slots, node.location);
+    }
+    for (const NodePtr& child : node.children) assignLocalSlots(*child, slots);
+}
+
+LocalSlotMap bindFunctionLocals(Node& function) {
+    LocalSlotMap slots;
+    function.localSlot = getLocalSlot(function.text, slots, function.location);
+    for (const NodePtr& child : function.children) assignLocalSlots(*child, slots);
+    return slots;
+}
 
 class Lexer {
 public:
@@ -261,7 +284,9 @@ public:
 
     std::vector<Token> tokenize() {
         std::vector<Token> tokens;
-        tokens.reserve(std::min<size_t>(source_.size() / 4, config::MAX_TOKENS));
+        // Source bytes include whitespace and comments; source/4 grossly
+        // over-reserves Token storage for real animation scripts.
+        tokens.reserve(std::min<size_t>(source_.size() / 12 + 64, 768));
         while (position_ < source_.size()) {
             const char c = source_[position_];
             if (c == '\n') {
@@ -675,13 +700,13 @@ struct Budget {
     }
 };
 
-Value resolveVariable(const std::string& name, Environment& environment,
-                      SourceLocation location) {
+Value resolveVariable(const std::string& name, uint16_t localSlot,
+                      Environment& environment, SourceLocation location) {
     if (name == "time") return Value::fromNumber(environment.time);
     if (name == "PI") return Value::fromNumber(3.14159265358979323846f);
-    const Value* local = environment.workspace.findLocal(name);
+    const Value* local = environment.workspace.findLocal(localSlot);
     if (local) return *local;
-    auto state = environment.state.find(name);
+    const auto state = environment.state.find(name);
     if (state != environment.state.end()) return state->second;
     throw SourceError("UNKNOWN_VARIABLE", "Unknown variable: " + name,
                       location.line, location.column);
@@ -940,7 +965,8 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
             if (node.literalKind == Node::LiteralKind::String) return Value::fromString(node.text);
             if (node.literalKind == Node::LiteralKind::Boolean) return Value::fromBoolean(node.boolean);
             return Value::fromNumber(node.number);
-        case Node::Kind::Variable: return resolveVariable(node.text, environment, node.location);
+        case Node::Kind::Variable:
+            return resolveVariable(node.text, node.localSlot, environment, node.location);
         case Node::Kind::Array: {
             Array values;
             values.reserve(node.children.size());
@@ -1071,7 +1097,7 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
     switch (node.kind) {
         case Node::Kind::Block: return executeBlock(node, environment, budget);
         case Node::Kind::Let:
-            environment.workspace.setLocal(node.text,
+            environment.workspace.setLocal(node.localSlot,
                 evaluate(*node.children[0], environment, budget), node.location);
             return {};
         case Node::Kind::Return:
@@ -1083,8 +1109,9 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
             const Node& target = *node.children[0];
             const Value value = evaluate(*node.children[1], environment, budget);
             if (target.kind == Node::Kind::Variable) {
-                const Value previous = resolveVariable(target.text, environment, target.location);
-                environment.workspace.setLocal(target.text,
+                const Value previous = resolveVariable(
+                    target.text, target.localSlot, environment, target.location);
+                environment.workspace.setLocal(target.localSlot,
                     applyAssignment(node.operation, previous, value), target.location);
                 return {};
             }
@@ -1110,7 +1137,7 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
             return executeBlock(*node.children[truthy(condition) ? 1 : 2], environment, budget);
         }
         case Node::Kind::For: {
-            environment.workspace.setLocal(node.text,
+            environment.workspace.setLocal(node.localSlot,
                 evaluate(*node.children[0], environment, budget), node.location);
             uint16_t iterations = 0;
             while (truthy(evaluate(*node.children[1], environment, budget))) {
@@ -1120,9 +1147,10 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
                 }
                 ExecResult result = executeBlock(*node.children[3], environment, budget);
                 if (result.returned) return result;
-                const Value oldValue = resolveVariable(node.auxiliary, environment, node.location);
+                const Value oldValue = resolveVariable(
+                    node.auxiliary, node.auxiliarySlot, environment, node.location);
                 const Value step = evaluate(*node.children[2], environment, budget);
-                environment.workspace.setLocal(node.auxiliary,
+                environment.workspace.setLocal(node.auxiliarySlot,
                     applyAssignment(node.operation, oldValue, step), node.location);
             }
             return {};
@@ -1143,6 +1171,7 @@ struct AnimationRuntime::Program {
     NodePtr ast;
     std::unordered_map<std::string, Value> state;
     Workspace workspace;
+    LocalSlotMap updateLocalSlots;
     std::string name;
     Node* update = nullptr;
     Node* render = nullptr;
@@ -1211,6 +1240,12 @@ void AnimationRuntime::serviceCompile() {
                                   declaration->location.line, declaration->location.column);
             }
         }
+        if (candidate->update) {
+            candidate->updateLocalSlots = bindFunctionLocals(*candidate->update);
+        }
+        if (candidate->render) {
+            bindFunctionLocals(*candidate->render);
+        }
         active_ = std::move(candidate);
         simulationTime_ = 0;
         frameCount_ = 0;
@@ -1253,16 +1288,18 @@ bool AnimationRuntime::renderFrame(float dt, std::array<Rgb, config::LED_COUNT>&
         if (active_->update) {
             active_->workspace.beginScope();
             Environment environment{active_->state, active_->workspace, simulationTime_};
-            active_->workspace.setLocal(active_->update->text, Value::fromNumber(dt),
+            active_->workspace.setLocal(active_->update->localSlot, Value::fromNumber(dt),
                                         active_->update->location);
             ExecResult result = execute(*active_->update->children[0], environment, budget);
             if (result.returned) {
                 throw SourceError("INVALID_RETURN", "return is not allowed in update()",
                                   active_->update->location.line, active_->update->location.column);
             }
-            for (const auto& state : active_->state) {
-                const Value* updated = active_->workspace.findLocal(state.first);
-                if (updated) active_->state[state.first] = *updated;
+            for (auto& state : active_->state) {
+                const auto slot = active_->updateLocalSlots.find(state.first);
+                if (slot == active_->updateLocalSlots.end()) continue;
+                const Value* updated = active_->workspace.findLocal(slot->second);
+                if (updated) state.second = *updated;
             }
         }
         for (uint16_t i = 0; i < config::LED_COUNT; ++i) {
@@ -1272,7 +1309,7 @@ bool AnimationRuntime::renderFrame(float dt, std::array<Rgb, config::LED_COUNT>&
             }
             active_->workspace.beginScope();
             Environment environment{active_->state, active_->workspace, simulationTime_};
-            active_->workspace.setLocal(active_->render->text, Value::fromNumber(i),
+            active_->workspace.setLocal(active_->render->localSlot, Value::fromNumber(i),
                                         active_->render->location);
             ExecResult result = execute(*active_->render->children[0], environment, budget);
             if (!result.returned ||
