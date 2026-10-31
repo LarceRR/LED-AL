@@ -655,6 +655,10 @@ float clamped(float value, float minimum, float maximum) {
     return std::max(minimum, std::min(maximum, value));
 }
 
+float randomUnit() {
+    return static_cast<float>(esp_random() >> 8U) * (1.0f / 16777216.0f);
+}
+
 Value callBuiltin(const std::string& name, const Value* args, size_t count,
                   SourceLocation location) {
     const auto arg = [args, count](size_t index, float fallback = 0.0f) {
@@ -668,12 +672,11 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         }
     };
     if (name == "random") {
-        return Value::fromNumber(static_cast<float>(esp_random()) / UINT32_MAX);
+        return Value::fromNumber(randomUnit());
     }
     if (name == "randomRange") {
         require(2);
-        return Value::fromNumber(arg(0) + (arg(1) - arg(0)) *
-                                 (static_cast<float>(esp_random()) / UINT32_MAX));
+        return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * randomUnit());
     }
     if (name == "array") {
         require(1);
