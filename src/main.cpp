@@ -253,6 +253,7 @@ void loop() {
                 nextFrameUs = frameStartedUs + intervalUs;
             }
         } else {
+            metrics.frameTimeMs = runtime.lastComputeTimeUs() / 1000.0f;
             metrics.lastErrorCode = error.code;
             metrics.lastErrorMessage = error.message;
             metrics.lastErrorLine = error.line;
