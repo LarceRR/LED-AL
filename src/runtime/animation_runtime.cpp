@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <esp_heap_caps.h>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -19,10 +20,59 @@ namespace {
 
 enum class TokenKind : uint8_t { Number, String, Identifier, Operator, End };
 
+enum class BuiltinId : uint8_t { Unknown, Random, RandomRange, Array, Rgb, Hsv, Mix, Gradient, Noise, Sin, Cos, Tan, Abs, Sqrt, Floor, Ceil, Round, Exp, Log, Pow, Atan2, Min, Max, Fract, Clamp, Lerp, Smoothstep };
+enum class BinaryOp : uint8_t { Unknown, Add, Subtract, Multiply, Divide, Modulo, Power, Less, Greater, LessEqual, GreaterEqual, Equal, NotEqual, And, Or };
+BuiltinId builtinIdFor(const std::string& name) {
+    if (name == "random") return BuiltinId::Random;
+    if (name == "randomRange") return BuiltinId::RandomRange;
+    if (name == "array") return BuiltinId::Array;
+    if (name == "rgb") return BuiltinId::Rgb;
+    if (name == "hsv") return BuiltinId::Hsv;
+    if (name == "mix") return BuiltinId::Mix;
+    if (name == "gradient") return BuiltinId::Gradient;
+    if (name == "noise") return BuiltinId::Noise;
+    if (name == "sin") return BuiltinId::Sin;
+    if (name == "cos") return BuiltinId::Cos;
+    if (name == "tan") return BuiltinId::Tan;
+    if (name == "abs") return BuiltinId::Abs;
+    if (name == "sqrt") return BuiltinId::Sqrt;
+    if (name == "floor") return BuiltinId::Floor;
+    if (name == "ceil") return BuiltinId::Ceil;
+    if (name == "round") return BuiltinId::Round;
+    if (name == "exp") return BuiltinId::Exp;
+    if (name == "log") return BuiltinId::Log;
+    if (name == "pow") return BuiltinId::Pow;
+    if (name == "atan2") return BuiltinId::Atan2;
+    if (name == "min") return BuiltinId::Min;
+    if (name == "max") return BuiltinId::Max;
+    if (name == "fract") return BuiltinId::Fract;
+    if (name == "clamp") return BuiltinId::Clamp;
+    if (name == "lerp") return BuiltinId::Lerp;
+    if (name == "smoothstep") return BuiltinId::Smoothstep;
+    return BuiltinId::Unknown;
+}
+BinaryOp binaryOpFor(const std::string& op) {
+    if (op == "+") return BinaryOp::Add;
+    if (op == "-") return BinaryOp::Subtract;
+    if (op == "*") return BinaryOp::Multiply;
+    if (op == "/") return BinaryOp::Divide;
+    if (op == "%") return BinaryOp::Modulo;
+    if (op == "^") return BinaryOp::Power;
+    if (op == "<") return BinaryOp::Less;
+    if (op == ">") return BinaryOp::Greater;
+    if (op == "<=") return BinaryOp::LessEqual;
+    if (op == ">=") return BinaryOp::GreaterEqual;
+    if (op == "==") return BinaryOp::Equal;
+    if (op == "!=") return BinaryOp::NotEqual;
+    if (op == "&&") return BinaryOp::And;
+    if (op == "||") return BinaryOp::Or;
+    return BinaryOp::Unknown;
+}
+
 struct Token {
     TokenKind kind = TokenKind::End;
     std::string text;
-    double number = 0;
+    float number = 0;
     uint16_t line = 1;
     uint16_t column = 1;
 };
@@ -42,14 +92,14 @@ using Array = std::vector<Value>;
 struct Value {
     enum class Kind : uint8_t { Number, Boolean, String, Array, Color };
     Kind kind = Kind::Number;
-    double number = 0;
+    float number = 0;
     bool boolean = false;
-    bool float32Array = false;
     std::string string;
     std::shared_ptr<Array> array;
-    double color[3] = {0, 0, 0};
+    std::shared_ptr<std::vector<float>> numericArray;
+    float color[3] = {0, 0, 0};
 
-    static Value fromNumber(double value) {
+    static Value fromNumber(float value) {
         Value result;
         result.number = value;
         return result;
@@ -66,14 +116,19 @@ struct Value {
         result.string = std::move(value);
         return result;
     }
-    static Value fromArray(Array value, bool float32 = false) {
+    static Value fromArray(Array value) {
         Value result;
         result.kind = Kind::Array;
         result.array = std::make_shared<Array>(std::move(value));
-        result.float32Array = float32;
         return result;
     }
-    static Value fromColor(double red, double green, double blue) {
+    static Value fromNumericArray(size_t length, float initial) {
+        Value result;
+        result.kind = Kind::Array;
+        result.numericArray = std::make_shared<std::vector<float>>(length, initial);
+        return result;
+    }
+    static Value fromColor(float red, float green, float blue) {
         Value result;
         result.kind = Kind::Color;
         result.color[0] = red;
@@ -88,8 +143,9 @@ struct SourceLocation {
     uint16_t column = 1;
 };
 
+constexpr uint16_t INVALID_LOCAL_SLOT = std::numeric_limits<uint16_t>::max();
+
 struct LocalEntry {
-    const std::string* name = nullptr;
     Value value;
     uint32_t generation = 0;
 };
@@ -97,10 +153,10 @@ struct LocalEntry {
 struct Workspace {
     std::array<LocalEntry, config::MAX_RUNTIME_LOCALS> locals{};
     std::array<Value, config::MAX_BUILTIN_ARGUMENTS> arguments{};
-    size_t localCount = 0;
     size_t argumentTop = 0;
     uint32_t generation = 0;
 
+    // Static local slots remove linear string lookups from render(i).
     void beginScope() {
         ++generation;
         if (generation == 0) {
@@ -109,45 +165,49 @@ struct Workspace {
         }
         argumentTop = 0;
     }
-    Value* findLocal(const std::string& name) {
-        for (size_t i = 0; i < localCount; ++i) {
-            LocalEntry& entry = locals[i];
-            if (entry.generation == generation && *entry.name == name) return &entry.value;
-        }
-        return nullptr;
+    const Value* findLocal(uint16_t slot) const {
+        if (slot == INVALID_LOCAL_SLOT || slot >= locals.size()) return nullptr;
+        const LocalEntry& entry = locals[slot];
+        return entry.generation == generation ? &entry.value : nullptr;
     }
-    const Value* findLocal(const std::string& name) const {
-        for (size_t i = 0; i < localCount; ++i) {
-            const LocalEntry& entry = locals[i];
-            if (entry.generation == generation && *entry.name == name) return &entry.value;
-        }
-        return nullptr;
-    }
-    void setLocal(const std::string& name, Value value, SourceLocation location) {
-        for (size_t i = 0; i < localCount; ++i) {
-            LocalEntry& entry = locals[i];
-            if (*entry.name == name) {
-                entry.value = std::move(value);
-                entry.generation = generation;
-                return;
-            }
-        }
-        if (localCount >= locals.size()) {
-            throw SourceError("LOCAL_LIMIT", "Runtime local variable limit exceeded",
+    void setLocal(uint16_t slot, Value value, SourceLocation location) {
+        if (slot == INVALID_LOCAL_SLOT || slot >= locals.size()) {
+            throw SourceError("LOCAL_LIMIT", "Invalid or excessive local variable slot",
                               location.line, location.column);
         }
-        LocalEntry& entry = locals[localCount++];
-        entry.name = &name;
+        LocalEntry& entry = locals[slot];
         entry.value = std::move(value);
         entry.generation = generation;
     }
 };
 
-double numberOf(const Value& value) {
+float numberOf(const Value& value) {
     if (value.kind == Value::Kind::Boolean) return value.boolean ? 1 : 0;
     if (value.kind == Value::Kind::Number) return value.number;
-    if (value.kind == Value::Kind::String) return strtod(value.string.c_str(), nullptr);
+    if (value.kind == Value::Kind::String) return strtof(value.string.c_str(), nullptr);
     return 0;
+}
+
+bool isArrayValue(const Value& value) {
+    return value.kind == Value::Kind::Array && (value.array || value.numericArray);
+}
+
+size_t arrayLength(const Value& value) {
+    if (value.numericArray) return value.numericArray->size();
+    return value.array ? value.array->size() : 0;
+}
+
+Value arrayElement(const Value& value, size_t index) {
+    if (value.numericArray) return Value::fromNumber((*value.numericArray)[index]);
+    return (*value.array)[index];
+}
+
+void setArrayElement(const Value& value, size_t index, const Value& element) {
+    if (value.numericArray) {
+        (*value.numericArray)[index] = numberOf(element);
+    } else {
+        (*value.array)[index] = element;
+    }
 }
 
 bool truthy(const Value& value) {
@@ -167,18 +227,56 @@ struct Node {
         Assign, If, For, Literal, Variable, Array, Unary, Binary,
         Conditional, Call, Index
     };
+    enum class LiteralKind : uint8_t { Number, String, Boolean };
     explicit Node(Kind kind, const Token& token = Token{})
         : kind(kind), location{token.line, token.column} {}
     Kind kind;
+    LiteralKind literalKind = LiteralKind::Number;
     SourceLocation location;
+    float number = 0.0f;
+    bool boolean = false;
+    char operation = 0;
+    BuiltinId builtin = BuiltinId::Unknown;
+    BinaryOp binaryOp = BinaryOp::Unknown;
+    uint16_t localSlot = INVALID_LOCAL_SLOT;
+    uint16_t auxiliarySlot = INVALID_LOCAL_SLOT;
     std::string text;
     std::string auxiliary;
-    std::string operation;
-    Value literal;
     std::vector<std::unique_ptr<Node>> children;
 };
 
 using NodePtr = std::unique_ptr<Node>;
+using LocalSlotMap = std::unordered_map<std::string, uint16_t>;
+
+uint16_t getLocalSlot(const std::string& name, LocalSlotMap& slots,
+                      SourceLocation location) {
+    const auto existing = slots.find(name);
+    if (existing != slots.end()) return existing->second;
+    if (slots.size() >= config::MAX_RUNTIME_LOCALS) {
+        throw SourceError("LOCAL_LIMIT", "Runtime local variable limit exceeded",
+                          location.line, location.column);
+    }
+    const uint16_t slot = static_cast<uint16_t>(slots.size());
+    slots.emplace(name, slot);
+    return slot;
+}
+
+void assignLocalSlots(Node& node, LocalSlotMap& slots) {
+    if (node.kind == Node::Kind::Variable || node.kind == Node::Kind::Let) {
+        node.localSlot = getLocalSlot(node.text, slots, node.location);
+    } else if (node.kind == Node::Kind::For) {
+        node.localSlot = getLocalSlot(node.text, slots, node.location);
+        node.auxiliarySlot = getLocalSlot(node.auxiliary, slots, node.location);
+    }
+    for (const NodePtr& child : node.children) assignLocalSlots(*child, slots);
+}
+
+LocalSlotMap bindFunctionLocals(Node& function) {
+    LocalSlotMap slots;
+    function.localSlot = getLocalSlot(function.text, slots, function.location);
+    for (const NodePtr& child : function.children) assignLocalSlots(*child, slots);
+    return slots;
+}
 
 class Lexer {
 public:
@@ -186,7 +284,9 @@ public:
 
     std::vector<Token> tokenize() {
         std::vector<Token> tokens;
-        tokens.reserve(std::min<size_t>(source_.size() / 4, config::MAX_TOKENS));
+        // Source bytes include whitespace and comments. Keep the initial
+        // allocation small on fragmented ESP32 heaps; grow only if required.
+        tokens.reserve(std::min<size_t>(source_.size() / 24 + 48, 512));
         while (position_ < source_.size()) {
             const char c = source_[position_];
             if (c == '\n') {
@@ -283,8 +383,8 @@ private:
             }
             while (isDigit(peek(0))) advance();
         }
-        const std::string text = source_.substr(start, position_ - start);
-        return Token{TokenKind::Number, text, strtod(text.c_str(), nullptr), line, column};
+        const float value = strtof(source_.c_str() + start, nullptr);
+        return Token{TokenKind::Number, "", value, line, column};
     }
     Token readIdentifier(uint16_t line, uint16_t column) {
         const size_t start = position_;
@@ -436,6 +536,7 @@ private:
         if (check("=") || check("+=") || check("-=") || check("*=") || check("/=")) {
             Token operation = tokens_[position_++];
             NodePtr node = make(Node::Kind::Assign, operation);
+            node->operation = operation.text[0];
             node->text = operation.text;
             node->children.push_back(std::move(target));
             node->children.push_back(expression());
@@ -460,7 +561,7 @@ private:
         expect(";");
         node->auxiliary = expectKind(TokenKind::Identifier, "Expected loop step variable").text;
         if (!check("+=") && !check("-=")) fail(peek(), "For loops support only += and -=");
-        node->operation = tokens_[position_++].text;
+        node->operation = tokens_[position_++].text[0];
         node->children.push_back(expression());
         expect(")");
         node->children.push_back(block());
@@ -498,6 +599,7 @@ private:
             if (current <= minimum) break;
             const Token operation = tokens_[position_++];
             NodePtr binary = make(Node::Kind::Binary, operation);
+            binary->binaryOp = binaryOpFor(operation.text);
             binary->text = operation.text;
             binary->children.push_back(std::move(left));
             binary->children.push_back(expression(current - (operation.text == "^" ? 1 : 0), depth + 1));
@@ -510,15 +612,19 @@ private:
         NodePtr node;
         if (token.kind == TokenKind::Number) {
             node = make(Node::Kind::Literal, token);
-            node->literal = Value::fromNumber(token.number);
+            node->literalKind = Node::LiteralKind::Number;
+            node->number = token.number;
         } else if (token.kind == TokenKind::String) {
             node = make(Node::Kind::Literal, token);
-            node->literal = Value::fromString(token.text);
+            node->literalKind = Node::LiteralKind::String;
+            node->text = token.text;
         } else if (token.text == "true" || token.text == "false") {
             node = make(Node::Kind::Literal, token);
-            node->literal = Value::fromBoolean(token.text == "true");
+            node->literalKind = Node::LiteralKind::Boolean;
+            node->boolean = token.text == "true";
         } else if (token.text == "-" || token.text == "!") {
             node = make(Node::Kind::Unary, token);
+            node->operation = token.text[0];
             node->text = token.text;
             node->children.push_back(expression(7, depth + 1));
         } else if (token.text == "(") {
@@ -546,6 +652,7 @@ private:
                 }
                 NodePtr call = make(Node::Kind::Call, token);
                 call->text = node->text;
+                call->builtin = builtinIdFor(call->text);
                 if (!check(")")) {
                     do {
                         call->children.push_back(expression(0, depth + 1));
@@ -573,7 +680,7 @@ private:
 struct Environment {
     const std::unordered_map<std::string, Value>& state;
     Workspace& workspace;
-    double time = 0;
+    float time = 0;
 };
 
 struct Budget {
@@ -593,13 +700,13 @@ struct Budget {
     }
 };
 
-Value resolveVariable(const std::string& name, Environment& environment,
-                      SourceLocation location) {
+Value resolveVariable(const std::string& name, uint16_t localSlot,
+                      Environment& environment, SourceLocation location) {
     if (name == "time") return Value::fromNumber(environment.time);
-    if (name == "PI") return Value::fromNumber(M_PI);
-    const Value* local = environment.workspace.findLocal(name);
+    if (name == "PI") return Value::fromNumber(3.14159265358979323846f);
+    const Value* local = environment.workspace.findLocal(localSlot);
     if (local) return *local;
-    auto state = environment.state.find(name);
+    const auto state = environment.state.find(name);
     if (state != environment.state.end()) return state->second;
     throw SourceError("UNKNOWN_VARIABLE", "Unknown variable: " + name,
                       location.line, location.column);
@@ -617,13 +724,17 @@ Value numericOrStringPlus(const Value& a, const Value& b) {
     return Value::fromNumber(numberOf(a) + numberOf(b));
 }
 
-double clamped(double value, double minimum, double maximum) {
+float clamped(float value, float minimum, float maximum) {
     return std::max(minimum, std::min(maximum, value));
 }
 
-Value callBuiltin(const std::string& name, const Value* args, size_t count,
-                  SourceLocation location) {
-    const auto arg = [args, count](size_t index, double fallback = 0.0) {
+float randomUnit() {
+    return static_cast<float>(esp_random() >> 8U) * (1.0f / 16777216.0f);
+}
+
+Value callBuiltin(BuiltinId builtin, const std::string& name,
+                  const Value* args, size_t count, SourceLocation location) {
+    const auto arg = [args, count](size_t index, float fallback = 0.0f) {
         return index < count ? numberOf(args[index]) : fallback;
     };
     const auto require = [count, location, &name](size_t required) {
@@ -633,45 +744,43 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
                               location.line, location.column);
         }
     };
-    if (name == "random") {
-        return Value::fromNumber(static_cast<double>(esp_random()) / UINT32_MAX);
+    switch (builtin) {
+        case BuiltinId::Random: {
+        return Value::fromNumber(randomUnit());
     }
-    if (name == "randomRange") {
+        case BuiltinId::RandomRange: {
         require(2);
-        return Value::fromNumber(arg(0) + (arg(1) - arg(0)) *
-                                 (static_cast<double>(esp_random()) / UINT32_MAX));
+        return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * randomUnit());
     }
-    if (name == "array") {
+        case BuiltinId::Array: {
         require(1);
-        const double requestedLength = std::floor(arg(0));
-        const int length = static_cast<int>(std::max(0.0, std::min(
-            static_cast<double>(config::MAX_ARRAY_LENGTH), requestedLength)));
-        const double initial = arg(1);
-        Array values(static_cast<size_t>(length));
-        for (Value& value : values) value = Value::fromNumber(static_cast<float>(initial));
-        return Value::fromArray(std::move(values), true);
+        const float requestedLength = std::floor(arg(0));
+        const int length = static_cast<int>(std::max(0.0f, std::min(
+            static_cast<float>(config::MAX_ARRAY_LENGTH), requestedLength)));
+        const float initial = arg(1);
+        return Value::fromNumericArray(static_cast<size_t>(length), initial);
     }
-    if (name == "rgb") {
+        case BuiltinId::Rgb: {
         require(3);
         return Value::fromColor(clamped(arg(0), 0, 1),
                                 clamped(arg(1), 0, 1),
                                 clamped(arg(2), 0, 1));
     }
-    if (name == "hsv") {
+        case BuiltinId::Hsv: {
         require(3);
-        const double h = std::fmod(std::fmod(arg(0), 1.0) + 1.0, 1.0);
-        const double s = arg(1);
-        const double v = arg(2);
-        const auto channel = [h, s, v](double n) {
-            const double k = std::fmod(n + h * 6.0, 6.0);
-            return v - v * s * std::max(0.0, std::min(std::min(k, 4.0 - k), 1.0));
+        const float h = std::fmod(std::fmod(arg(0), 1.0f) + 1.0f, 1.0f);
+        const float s = arg(1);
+        const float v = arg(2);
+        const auto channel = [h, s, v](float n) {
+            const float k = std::fmod(n + h * 6.0f, 6.0f);
+            return v - v * s * std::max(0.0f, std::min(std::min(k, 4.0f - k), 1.0f));
         };
         return Value::fromColor(channel(5), channel(3), channel(1));
     }
-    if (name == "mix") {
+        case BuiltinId::Mix: {
         require(3);
         if (args[0].kind == Value::Kind::Color && args[1].kind == Value::Kind::Color) {
-            const double amount = arg(2);
+            const float amount = arg(2);
             return Value::fromColor(
                 args[0].color[0] + (args[1].color[0] - args[0].color[0]) * amount,
                 args[0].color[1] + (args[1].color[1] - args[0].color[1]) * amount,
@@ -679,22 +788,22 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         }
         const auto colorOrArray = [](const Value& value) {
             return value.kind == Value::Kind::Color ||
-                   (value.kind == Value::Kind::Array && value.array);
+                   (value.kind == Value::Kind::Array && (value.array || value.numericArray));
         };
         if (colorOrArray(args[0]) && colorOrArray(args[1])) {
             Array result;
             const auto lengthOf = [](const Value& value) {
-                return value.kind == Value::Kind::Color ? size_t{3} : value.array->size();
+                return value.kind == Value::Kind::Color ? size_t{3} : arrayLength(value);
             };
             const auto channelOf = [](const Value& value, size_t index) {
                 return value.kind == Value::Kind::Color
                            ? value.color[index]
-                           : numberOf((*value.array)[index]);
+                           : numberOf(arrayElement(value, index));
             };
             const size_t length = std::min(lengthOf(args[0]), lengthOf(args[1]));
             result.reserve(length);
             for (size_t i = 0; i < length; ++i) {
-                const double a = channelOf(args[0], i);
+                const float a = channelOf(args[0], i);
                 result.push_back(Value::fromNumber(a + (channelOf(args[1], i) - a) * arg(2)));
             }
             if (args[0].kind == Value::Kind::Color && args[1].kind == Value::Kind::Color) {
@@ -704,20 +813,20 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         }
         return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * arg(2));
     }
-    if (name == "gradient") {
+        case BuiltinId::Gradient: {
         require(2);
         if (args[1].kind != Value::Kind::Array || !args[1].array || args[1].array->empty()) {
             return Value::fromArray({Value::fromNumber(0), Value::fromNumber(0), Value::fromNumber(0)});
         }
-        const double position = arg(0);
+        const float position = arg(0);
         const auto stopValue = [](const Value& stop, size_t index) -> const Value* {
             if (stop.kind != Value::Kind::Array || !stop.array || stop.array->size() <= index) return nullptr;
             return &(*stop.array)[index];
         };
         size_t firstIndex = 0;
         size_t lastIndex = 0;
-        double firstPosition = std::numeric_limits<double>::infinity();
-        double lastPosition = -std::numeric_limits<double>::infinity();
+        float firstPosition = std::numeric_limits<float>::infinity();
+        float lastPosition = -std::numeric_limits<float>::infinity();
         for (size_t i = 0; i < args[1].array->size(); ++i) {
             const Value* stop = &(*args[1].array)[i];
             const Value* stopPosition = stopValue(*stop, 0);
@@ -725,7 +834,7 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
                 throw SourceError("TYPE_ERROR", "Invalid gradient stop",
                                   location.line, location.column);
             }
-            const double value = numberOf(*stopPosition);
+            const float value = numberOf(*stopPosition);
             if (value < firstPosition) {
                 firstPosition = value;
                 firstIndex = i;
@@ -743,10 +852,10 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         const Value* leftColor = stopValue(*leftPosition, 1);
         const Value* rightPosition = nullptr;
         const Value* rightColor = nullptr;
-        double lower = firstPosition;
-        double upper = lastPosition;
+        float lower = firstPosition;
+        float upper = lastPosition;
         for (const Value& stop : *args[1].array) {
-            const double value = numberOf(*stopValue(stop, 0));
+            const float value = numberOf(*stopValue(stop, 0));
             if (value > firstPosition && value <= position && value >= lower) {
                 lower = value;
                 leftColor = stopValue(stop, 1);
@@ -758,98 +867,106 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
             }
         }
         if (!rightPosition || !rightColor || !leftColor) return *stopValue(last, 1);
-        const double span = upper - lower;
-        const double amount = span == 0 ? 0 : (position - lower) / span;
+        const float span = upper - lower;
+        const float amount = span == 0 ? 0 : (position - lower) / span;
         const Value mixArgs[] = {*leftColor, *rightColor, Value::fromNumber(amount)};
-        return callBuiltin("mix", mixArgs, 3, location);
+        return callBuiltin(BuiltinId::Mix, "mix", mixArgs, 3, location);
     }
-    if (name == "noise") {
+        case BuiltinId::Noise: {
         require(1);
-        const double x = arg(0);
-        const double y = arg(1);
-        const double floorX = floor(x);
-        const double floorY = floor(y);
-        const auto toUint32 = [](double value) {
+        const float x = arg(0);
+        const float y = arg(1);
+        const float floorX = std::floor(x);
+        const float floorY = std::floor(y);
+        const auto toUint32 = [](float value) {
             if (!std::isfinite(value)) return uint32_t{0};
-            const double truncated = trunc(value);
-            const double int64Limit = std::ldexp(1.0, 63);
-            if (truncated >= -int64Limit && truncated < int64Limit) {
-                return static_cast<uint32_t>(static_cast<int64_t>(truncated));
+
+            // The common LED-animation coordinates fit in int32. Avoid fmod()
+            // for that hot path while retaining wraparound for larger inputs.
+            if (value >= -2147483648.0f && value < 2147483648.0f) {
+                return static_cast<uint32_t>(static_cast<int32_t>(value));
             }
-            double wrapped = fmod(truncated, 4294967296.0);
-            if (wrapped < 0) wrapped += 4294967296.0;
+
+            float wrapped = std::fmod(value, 4294967296.0f);
+            if (wrapped < 0.0f) wrapped += 4294967296.0f;
             return static_cast<uint32_t>(wrapped);
         };
         const uint32_t ix = toUint32(floorX);
         const uint32_t iy = toUint32(floorY);
-        const double fx = x - floorX;
-        const double fy = y - floorY;
+        const float fx = x - floorX;
+        const float fy = y - floorY;
         const auto hash = [](uint32_t a, uint32_t b) {
             uint32_t n = a * 374761393U + b * 668265263U;
             n = (n ^ (n >> 13U)) * 1274126177U;
-            return static_cast<double>(n ^ (n >> 16U)) / 4294967295.0;
+            return static_cast<float>(n ^ (n >> 16U)) * (1.0f / 4294967295.0f);
         };
-        const auto fade = [](double value) { return value * value * (3 - 2 * value); };
-        const double a = hash(ix, iy);
-        const double b = hash(ix + 1U, iy);
-        const double c = hash(ix, iy + 1U);
-        const double d = hash(ix + 1U, iy + 1U);
-        const double u = fade(fx);
-        const double v = fade(fy);
+        const auto fade = [](float value) { return value * value * (3 - 2 * value); };
+        const float a = hash(ix, iy);
+        const float b = hash(ix + 1U, iy);
+        const float c = hash(ix, iy + 1U);
+        const float d = hash(ix + 1U, iy + 1U);
+        const float u = fade(fx);
+        const float v = fade(fy);
         return Value::fromNumber((a + (b - a) * u) * (1 - v) +
                                  (c + (d - c) * u) * v);
     }
 
-    require(1);
-    if (name == "sin") return Value::fromNumber(sin(arg(0)));
-    if (name == "cos") return Value::fromNumber(cos(arg(0)));
-    if (name == "tan") return Value::fromNumber(tan(arg(0)));
-    if (name == "abs") return Value::fromNumber(fabs(arg(0)));
-    if (name == "sqrt") return Value::fromNumber(sqrt(arg(0)));
-    if (name == "floor") return Value::fromNumber(floor(arg(0)));
-    if (name == "ceil") return Value::fromNumber(ceil(arg(0)));
-    if (name == "round") return Value::fromNumber(round(arg(0)));
-    if (name == "exp") return Value::fromNumber(exp(arg(0)));
-    if (name == "log") return Value::fromNumber(log(arg(0)));
-    if (name == "pow") {
+        case BuiltinId::Sin: require(1); return Value::fromNumber(std::sin(arg(0)));
+        case BuiltinId::Cos: require(1); return Value::fromNumber(std::cos(arg(0)));
+        case BuiltinId::Tan: require(1); return Value::fromNumber(std::tan(arg(0)));
+        case BuiltinId::Abs: require(1); return Value::fromNumber(std::fabs(arg(0)));
+        case BuiltinId::Sqrt: require(1); return Value::fromNumber(std::sqrt(arg(0)));
+        case BuiltinId::Floor: require(1); return Value::fromNumber(std::floor(arg(0)));
+        case BuiltinId::Ceil: require(1); return Value::fromNumber(std::ceil(arg(0)));
+        case BuiltinId::Round: require(1); return Value::fromNumber(std::round(arg(0)));
+        case BuiltinId::Exp: require(1); return Value::fromNumber(std::exp(arg(0)));
+        case BuiltinId::Log: require(1); return Value::fromNumber(std::log(arg(0)));
+        case BuiltinId::Pow: {
         require(2);
-        return Value::fromNumber(pow(arg(0), arg(1)));
+        return Value::fromNumber(std::pow(arg(0), arg(1)));
     }
-    if (name == "atan2") {
+        case BuiltinId::Atan2: {
         require(2);
-        return Value::fromNumber(atan2(arg(0), arg(1)));
+        return Value::fromNumber(std::atan2(arg(0), arg(1)));
     }
-    if (name == "min" || name == "max") {
-        double result = arg(0);
+        case BuiltinId::Min:
+        case BuiltinId::Max: {
+        float result = arg(0);
         for (size_t i = 1; i < count; ++i) {
-            result = name == "min" ? std::min(result, arg(i)) : std::max(result, arg(i));
+            result = builtin == BuiltinId::Min ? std::min(result, arg(i)) : std::max(result, arg(i));
         }
         return Value::fromNumber(result);
     }
-    if (name == "fract") return Value::fromNumber(arg(0) - floor(arg(0)));
-    if (name == "clamp") {
+        case BuiltinId::Fract: require(1); return Value::fromNumber(arg(0) - std::floor(arg(0)));
+        case BuiltinId::Clamp: {
         require(3);
         return Value::fromNumber(std::max(arg(1), std::min(arg(2), arg(0))));
     }
-    if (name == "lerp") {
+        case BuiltinId::Lerp: {
         require(3);
         return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * arg(2));
     }
-    if (name == "smoothstep") {
+        case BuiltinId::Smoothstep: {
         require(3);
-        const double span = arg(1) - arg(0);
-        const double t = span == 0 ? 0 : clamped((arg(2) - arg(0)) / span, 0, 1);
+        const float span = arg(1) - arg(0);
+        const float t = span == 0 ? 0 : clamped((arg(2) - arg(0)) / span, 0, 1);
         return Value::fromNumber(t * t * (3 - 2 * t));
     }
-    throw SourceError("UNKNOWN_FUNCTION", "Unknown function: " + name,
-                      location.line, location.column);
+        default:
+            throw SourceError("UNKNOWN_FUNCTION", "Unknown function: " + name,
+                              location.line, location.column);
+    }
 }
 
 Value evaluate(const Node& node, Environment& environment, Budget& budget) {
     budget.consume(node.location);
     switch (node.kind) {
-        case Node::Kind::Literal: return node.literal;
-        case Node::Kind::Variable: return resolveVariable(node.text, environment, node.location);
+        case Node::Kind::Literal:
+            if (node.literalKind == Node::LiteralKind::String) return Value::fromString(node.text);
+            if (node.literalKind == Node::LiteralKind::Boolean) return Value::fromBoolean(node.boolean);
+            return Value::fromNumber(node.number);
+        case Node::Kind::Variable:
+            return resolveVariable(node.text, node.localSlot, environment, node.location);
         case Node::Kind::Array: {
             Array values;
             values.reserve(node.children.size());
@@ -858,8 +975,8 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
         }
         case Node::Kind::Unary: {
             const Value value = evaluate(*node.children[0], environment, budget);
-            return node.text == "-" ? Value::fromNumber(-numberOf(value))
-                                    : Value::fromBoolean(!truthy(value));
+            return node.operation == '-' ? Value::fromNumber(-numberOf(value))
+                                          : Value::fromBoolean(!truthy(value));
         }
         case Node::Kind::Conditional: {
             const Value condition = evaluate(*node.children[0], environment, budget);
@@ -867,54 +984,60 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
         }
         case Node::Kind::Binary: {
             const Value left = evaluate(*node.children[0], environment, budget);
+            if (node.binaryOp == BinaryOp::And && !truthy(left)) return Value::fromBoolean(false);
+            if (node.binaryOp == BinaryOp::Or && truthy(left)) return Value::fromBoolean(true);
             const Value right = evaluate(*node.children[1], environment, budget);
-            const double a = numberOf(left);
-            const double b = numberOf(right);
-            if (node.text == "+") return numericOrStringPlus(left, right);
-            if (node.text == "-") return Value::fromNumber(a - b);
-            if (node.text == "*") return Value::fromNumber(a * b);
-            if (node.text == "/") return Value::fromNumber(b == 0 ? 0 : a / b);
-            if (node.text == "%") return Value::fromNumber(b == 0 ? 0 : fmod(a, b));
-            if (node.text == "^") return Value::fromNumber(pow(a, b));
-            if (node.text == "<") return Value::fromBoolean(a < b);
-            if (node.text == ">") return Value::fromBoolean(a > b);
-            if (node.text == "<=") return Value::fromBoolean(a <= b);
-            if (node.text == ">=") return Value::fromBoolean(a >= b);
-            if (node.text == "==" || node.text == "!=") {
-                bool equal = false;
-                if (left.kind == right.kind) {
-                    if (left.kind == Value::Kind::String) equal = left.string == right.string;
-                    else if (left.kind == Value::Kind::Boolean) equal = left.boolean == right.boolean;
-                    else if (left.kind == Value::Kind::Number) equal = a == b;
-                    else if (left.kind == Value::Kind::Color) {
-                        equal = left.color[0] == right.color[0] &&
-                                left.color[1] == right.color[1] &&
-                                left.color[2] == right.color[2];
-                    } else equal = left.array == right.array;
+            const float a = numberOf(left);
+            const float b = numberOf(right);
+            switch (node.binaryOp) {
+                case BinaryOp::Add: return numericOrStringPlus(left, right);
+                case BinaryOp::Subtract: return Value::fromNumber(a - b);
+                case BinaryOp::Multiply: return Value::fromNumber(a * b);
+                case BinaryOp::Divide: return Value::fromNumber(b == 0 ? 0 : a / b);
+                case BinaryOp::Modulo: return Value::fromNumber(b == 0 ? 0 : std::fmod(a, b));
+                case BinaryOp::Power: return Value::fromNumber(std::pow(a, b));
+                case BinaryOp::Less: return Value::fromBoolean(a < b);
+                case BinaryOp::Greater: return Value::fromBoolean(a > b);
+                case BinaryOp::LessEqual: return Value::fromBoolean(a <= b);
+                case BinaryOp::GreaterEqual: return Value::fromBoolean(a >= b);
+                case BinaryOp::Equal:
+                case BinaryOp::NotEqual: {
+                    bool equal = false;
+                    if (left.kind == right.kind) {
+                        if (left.kind == Value::Kind::String) equal = left.string == right.string;
+                        else if (left.kind == Value::Kind::Boolean) equal = left.boolean == right.boolean;
+                        else if (left.kind == Value::Kind::Number) equal = a == b;
+                        else if (left.kind == Value::Kind::Color) {
+                            equal = left.color[0] == right.color[0] &&
+                                    left.color[1] == right.color[1] &&
+                                    left.color[2] == right.color[2];
+                        } else {
+                            equal = left.array == right.array &&
+                                    left.numericArray == right.numericArray;
+                        }
+                    }
+                    return Value::fromBoolean(node.binaryOp == BinaryOp::Equal ? equal : !equal);
                 }
-                return Value::fromBoolean(node.text == "==" ? equal : !equal);
+                case BinaryOp::And: return Value::fromBoolean(truthy(left) && truthy(right));
+                case BinaryOp::Or: return Value::fromBoolean(truthy(left) || truthy(right));
+                default: break;
             }
-            if (node.text == "&&") return Value::fromBoolean(truthy(left) && truthy(right));
-            if (node.text == "||") return Value::fromBoolean(truthy(left) || truthy(right));
             break;
         }
         case Node::Kind::Index: {
             const Value base = evaluate(*node.children[0], environment, budget);
-            const double indexValue = floor(numberOf(evaluate(*node.children[1], environment, budget)));
+            const float indexValue = std::floor(numberOf(evaluate(*node.children[1], environment, budget)));
             if (base.kind == Value::Kind::Color) {
                 if (!std::isfinite(indexValue) || indexValue < 0 || indexValue >= 3) {
                     return Value::fromNumber(0);
                 }
                 return Value::fromNumber(base.color[static_cast<size_t>(indexValue)]);
             }
-            if (!std::isfinite(indexValue) || indexValue < 0 ||
-                indexValue > static_cast<double>(std::numeric_limits<int>::max())) {
+            if (!isArrayValue(base) || !std::isfinite(indexValue) ||
+                indexValue < 0 || indexValue >= static_cast<float>(arrayLength(base))) {
                 return Value::fromNumber(0);
             }
-            const int index = static_cast<int>(indexValue);
-            if (base.kind != Value::Kind::Array || !base.array || index < 0 ||
-                static_cast<size_t>(index) >= base.array->size()) return Value::fromNumber(0);
-            return (*base.array)[static_cast<size_t>(index)];
+            return arrayElement(base, static_cast<size_t>(indexValue));
         }
         case Node::Kind::Call: {
             if (node.children.size() > environment.workspace.arguments.size()) {
@@ -931,7 +1054,7 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
                 environment.workspace.arguments[base + i] =
                     evaluate(*node.children[i], environment, budget);
             }
-            const Value result = callBuiltin(node.text,
+            const Value result = callBuiltin(node.builtin, node.text,
                 environment.workspace.arguments.data() + base,
                 node.children.size(), node.location);
             environment.workspace.argumentTop = base;
@@ -943,14 +1066,14 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
                       node.location.line, node.location.column);
 }
 
-Value applyAssignment(const std::string& operation, const Value& previous, const Value& value) {
-    if (operation == "=") return value;
-    if (operation == "+=") return numericOrStringPlus(previous, value);
-    const double left = numberOf(previous);
-    const double right = numberOf(value);
-    if (operation == "-=") return Value::fromNumber(left - right);
-    if (operation == "*=") return Value::fromNumber(left * right);
-    if (operation == "/=") return Value::fromNumber(right == 0 ? 0 : left / right);
+Value applyAssignment(char operation, const Value& previous, const Value& value) {
+    if (operation == '=') return value;
+    if (operation == '+') return numericOrStringPlus(previous, value);
+    const float left = numberOf(previous);
+    const float right = numberOf(value);
+    if (operation == '-') return Value::fromNumber(left - right);
+    if (operation == '*') return Value::fromNumber(left * right);
+    if (operation == '/') return Value::fromNumber(right == 0 ? 0 : left / right);
     return value;
 }
 
@@ -974,7 +1097,7 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
     switch (node.kind) {
         case Node::Kind::Block: return executeBlock(node, environment, budget);
         case Node::Kind::Let:
-            environment.workspace.setLocal(node.text,
+            environment.workspace.setLocal(node.localSlot,
                 evaluate(*node.children[0], environment, budget), node.location);
             return {};
         case Node::Kind::Return:
@@ -986,31 +1109,24 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
             const Node& target = *node.children[0];
             const Value value = evaluate(*node.children[1], environment, budget);
             if (target.kind == Node::Kind::Variable) {
-                const Value previous = resolveVariable(target.text, environment, target.location);
-                environment.workspace.setLocal(target.text,
-                    applyAssignment(node.text, previous, value), target.location);
+                const Value previous = resolveVariable(
+                    target.text, target.localSlot, environment, target.location);
+                environment.workspace.setLocal(target.localSlot,
+                    applyAssignment(node.operation, previous, value), target.location);
                 return {};
             }
             if (target.kind == Node::Kind::Index) {
                 const Value base = evaluate(*target.children[0], environment, budget);
-                const double indexValue = floor(numberOf(
+                const float indexValue = std::floor(numberOf(
                     evaluate(*target.children[1], environment, budget)));
-                if (!std::isfinite(indexValue) || indexValue < 0 ||
-                    indexValue > static_cast<double>(std::numeric_limits<int>::max())) {
-                    throw SourceError("ARRAY_BOUNDS", "Array index out of bounds",
-                                          target.location.line, target.location.column);
-                }
-                const int index = static_cast<int>(indexValue);
-                if (base.kind != Value::Kind::Array || !base.array || index < 0 ||
-                    static_cast<size_t>(index) >= base.array->size()) {
+                if (!isArrayValue(base) || !std::isfinite(indexValue) ||
+                    indexValue < 0 || indexValue >= static_cast<float>(arrayLength(base))) {
                     throw SourceError("ARRAY_BOUNDS", "Array index out of bounds",
                                       target.location.line, target.location.column);
                 }
-                Value result = applyAssignment(node.text, (*base.array)[index], value);
-                if (base.float32Array && result.kind == Value::Kind::Number) {
-                    result = Value::fromNumber(static_cast<float>(numberOf(result)));
-                }
-                (*base.array)[static_cast<size_t>(index)] = result;
+                const size_t index = static_cast<size_t>(indexValue);
+                Value result = applyAssignment(node.operation, arrayElement(base, index), value);
+                setArrayElement(base, index, result);
                 return {};
             }
             throw SourceError("INVALID_ASSIGNMENT", "Invalid assignment target",
@@ -1021,7 +1137,7 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
             return executeBlock(*node.children[truthy(condition) ? 1 : 2], environment, budget);
         }
         case Node::Kind::For: {
-            environment.workspace.setLocal(node.text,
+            environment.workspace.setLocal(node.localSlot,
                 evaluate(*node.children[0], environment, budget), node.location);
             uint16_t iterations = 0;
             while (truthy(evaluate(*node.children[1], environment, budget))) {
@@ -1031,9 +1147,10 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
                 }
                 ExecResult result = executeBlock(*node.children[3], environment, budget);
                 if (result.returned) return result;
-                const Value oldValue = resolveVariable(node.auxiliary, environment, node.location);
+                const Value oldValue = resolveVariable(
+                    node.auxiliary, node.auxiliarySlot, environment, node.location);
                 const Value step = evaluate(*node.children[2], environment, budget);
-                environment.workspace.setLocal(node.auxiliary,
+                environment.workspace.setLocal(node.auxiliarySlot,
                     applyAssignment(node.operation, oldValue, step), node.location);
             }
             return {};
@@ -1054,6 +1171,7 @@ struct AnimationRuntime::Program {
     NodePtr ast;
     std::unordered_map<std::string, Value> state;
     Workspace workspace;
+    LocalSlotMap updateLocalSlots;
     std::string name;
     Node* update = nullptr;
     Node* render = nullptr;
@@ -1087,6 +1205,14 @@ void AnimationRuntime::serviceCompile() {
     if (!job_.pending) return;
     job_.pending = false;
     const uint32_t compileStarted = micros();
+    const size_t sourceBytes = pendingSource_.size();
+    Serial.printf(
+        "{\"level\":\"info\",\"component\":\"runtime\",\"event\":\"compile_started\",\"jobId\":%lu,\"sourceBytes\":%u,\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+        static_cast<unsigned long>(job_.id),
+        static_cast<unsigned>(sourceBytes),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+    Serial.flush();
     try {
         auto candidate = std::make_unique<Program>();
         std::vector<Token> tokens = Lexer(pendingSource_).tokenize();
@@ -1122,6 +1248,12 @@ void AnimationRuntime::serviceCompile() {
                                   declaration->location.line, declaration->location.column);
             }
         }
+        if (candidate->update) {
+            candidate->updateLocalSlots = bindFunctionLocals(*candidate->update);
+        }
+        if (candidate->render) {
+            bindFunctionLocals(*candidate->render);
+        }
         active_ = std::move(candidate);
         simulationTime_ = 0;
         frameCount_ = 0;
@@ -1129,14 +1261,43 @@ void AnimationRuntime::serviceCompile() {
         job_.complete = true;
         job_.success = true;
         job_.name = active_->name;
+        Serial.printf(
+            "{\"level\":\"info\",\"component\":\"runtime\",\"event\":\"compile_succeeded\",\"jobId\":%lu,\"sourceBytes\":%u,\"compile_us\":%lu,\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+            static_cast<unsigned long>(job_.id),
+            static_cast<unsigned>(sourceBytes),
+            static_cast<unsigned long>(micros() - compileStarted),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+        Serial.flush();
     } catch (const SourceError& error) {
         job_.complete = true;
         job_.success = false;
         job_.error = convertError(error);
+        Serial.printf(
+            "{\"level\":\"error\",\"component\":\"runtime\",\"event\":\"compile_failed\",\"jobId\":%lu,\"code\":\"%s\",\"line\":%u,\"column\":%u,\"sourceBytes\":%u,\"compile_us\":%lu,\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+            static_cast<unsigned long>(job_.id), error.code.c_str(),
+            error.line, error.column, static_cast<unsigned>(sourceBytes),
+            static_cast<unsigned long>(micros() - compileStarted),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+        Serial.flush();
     } catch (const std::bad_alloc&) {
         job_.complete = true;
         job_.success = false;
-        job_.error = RuntimeError{"OUT_OF_MEMORY", "Not enough memory to compile animation", 0, 0};
+        const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        job_.error = RuntimeError{
+            "OUT_OF_MEMORY",
+            "Not enough memory to compile animation (free " +
+                std::to_string(freeHeap) + " B, largest block " +
+                std::to_string(largestBlock) + " B)",
+            0, 0};
+        Serial.printf(
+            "{\"level\":\"error\",\"component\":\"runtime\",\"event\":\"compile_failed\",\"jobId\":%lu,\"code\":\"OUT_OF_MEMORY\",\"sourceBytes\":%u,\"compile_us\":%lu,\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+            static_cast<unsigned long>(job_.id), static_cast<unsigned>(sourceBytes),
+            static_cast<unsigned long>(micros() - compileStarted),
+            static_cast<unsigned>(freeHeap), static_cast<unsigned>(largestBlock));
+        Serial.flush();
     }
     pendingSource_.clear();
     pendingName_.clear();
@@ -1150,23 +1311,25 @@ bool AnimationRuntime::renderFrame(float dt, std::array<Rgb, config::LED_COUNT>&
     }
     const uint32_t started = micros();
     const uint32_t deadline = started + config::MAX_FRAME_TIME_US;
-    std::array<Rgb, config::LED_COUNT> frame{};
+    workingFrame_.fill(Rgb{});
     simulationTime_ += std::max(0.0f, std::min(dt, 0.05f)) * timeScale_;
     Budget budget{config::MAX_INSTRUCTIONS_PER_FRAME, deadline};
     try {
         if (active_->update) {
             active_->workspace.beginScope();
             Environment environment{active_->state, active_->workspace, simulationTime_};
-            active_->workspace.setLocal(active_->update->text, Value::fromNumber(dt),
+            active_->workspace.setLocal(active_->update->localSlot, Value::fromNumber(dt),
                                         active_->update->location);
             ExecResult result = execute(*active_->update->children[0], environment, budget);
             if (result.returned) {
                 throw SourceError("INVALID_RETURN", "return is not allowed in update()",
                                   active_->update->location.line, active_->update->location.column);
             }
-            for (const auto& state : active_->state) {
-                const Value* updated = active_->workspace.findLocal(state.first);
-                if (updated) active_->state[state.first] = *updated;
+            for (auto& state : active_->state) {
+                const auto slot = active_->updateLocalSlots.find(state.first);
+                if (slot == active_->updateLocalSlots.end()) continue;
+                const Value* updated = active_->workspace.findLocal(slot->second);
+                if (updated) state.second = *updated;
             }
         }
         for (uint16_t i = 0; i < config::LED_COUNT; ++i) {
@@ -1176,25 +1339,24 @@ bool AnimationRuntime::renderFrame(float dt, std::array<Rgb, config::LED_COUNT>&
             }
             active_->workspace.beginScope();
             Environment environment{active_->state, active_->workspace, simulationTime_};
-            active_->workspace.setLocal(active_->render->text, Value::fromNumber(i),
+            active_->workspace.setLocal(active_->render->localSlot, Value::fromNumber(i),
                                         active_->render->location);
             ExecResult result = execute(*active_->render->children[0], environment, budget);
             if (!result.returned ||
                 !(result.value.kind == Value::Kind::Color ||
-                  (result.value.kind == Value::Kind::Array && result.value.array &&
-                   result.value.array->size() >= 3))) {
+                  (isArrayValue(result.value) && arrayLength(result.value) >= 3))) {
                 throw SourceError("INVALID_COLOR", "render(i) must return rgb(...) or hsv(...)",
                                   active_->render->location.line, active_->render->location.column);
             }
             const auto channel = [&result](size_t index) {
-                const double value = result.value.kind == Value::Kind::Color
+                const float value = result.value.kind == Value::Kind::Color
                                          ? result.value.color[index]
-                                         : numberOf((*result.value.array)[index]);
+                                         : numberOf(arrayElement(result.value, index));
                 return static_cast<float>(std::isfinite(value) ? clamped(value, 0, 1) : 0);
             };
-            frame[i] = Rgb{channel(0), channel(1), channel(2)};
+            workingFrame_[i] = Rgb{channel(0), channel(1), channel(2)};
         }
-        output = frame;
+        output = workingFrame_;
         ++frameCount_;
         lastComputeTimeUs_ = micros() - started;
         return true;

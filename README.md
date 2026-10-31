@@ -13,7 +13,7 @@ LED LAB is a standalone ESP32 access point and WS2812B animation controller. The
 
 Do not power the 300-pixel strip from the ESP32 board or USB. At the conservative 60 mA/pixel estimate, full white can require 18 A (90 W). Size wiring, fusing, power injection, and supply for the actual strip. The firmware starts with black output, defaults to 20% brightness, and estimates output current with a configurable 2 A budget. Its model estimates 1 mA idle per pixel plus 20 mA for each full-scale color channel, weighted by the logical color and requested brightness. If the estimate exceeds the configured budget, the physical frame is scaled to fit the budget after the idle estimate. This model is not a current sensor and does not replace a correctly sized supply or electrical protection.
 
-The setup access point is `LED-LAB` with password `ledlab123`; change `WIFI_PASSWORD` in `include/device_config.h` before deployment. The password must remain at least 8 characters. The AP address is `192.168.4.1`. The ESP32 can also join a home 2.4 GHz Wi-Fi network. Use **Scan** in the **Home Wi-Fi** panel and select the router SSID; scanned SSIDs are submitted as their original bytes so UTF-8 and other non-ASCII names are not corrupted by browser/JSON encoding. Hidden networks can be entered manually. Credentials are stored in NVS and are not returned by the status API. The setup access point stays enabled as a fallback. Once connected, the interface shows the ESP32's DHCP address. Connect the phone or computer to the same router and open that address to keep controlling the device while using the home network's internet.
+The setup access point is `LED-LAB` with password `ledlab123`; change `WIFI_PASSWORD` in `include/device_config.h` before deployment. The password must remain at least 8 characters. The setup AP uses `192.168.4.1` and a captive DNS server that resolves hostnames to the setup page. On first boot (or when no credentials are saved), connect to `LED-LAB` and open `http://192.168.4.1`; the captive-portal prompt may also open automatically. The ESP32 connects to home 2.4 GHz Wi-Fi in STA mode. Use **Scan** in the **Home Wi-Fi** panel and select the router SSID; scanning is asynchronous and does not deliberately disconnect the station. Scanned SSIDs are submitted as their original bytes so UTF-8 and other non-ASCII names are not corrupted by browser/JSON encoding. Hidden networks can be entered manually. Credentials are stored in NVS and are not returned by the status API. Up to three distinct networks are remembered: the newest is the primary profile and the previous two remain as backups. The main-loop Wi-Fi manager tries the saved profiles in order after repeated failures. Existing single-network NVS credentials are migrated automatically. New credentials are applied by the main-loop Wi-Fi manager after the HTTP response has been queued, so the setup page can report the transition. After a successful DHCP connection, the firmware registers `ledal.local` with mDNS and advertises HTTP on port 80. The setup AP remains available for a 12-second handoff window, then turns off. Connect the phone or computer to the same home network and open `http://ledal.local`; the DHCP IP is also shown as a fallback for clients without mDNS support. When a saved network cannot be reached on boot, the AP fallback starts after 15 seconds. If a previously working STA connection is lost, the AP fallback returns and STA retries use exponential backoff up to 30 seconds. The HTTP server and its route table are started once and remain independent of AP/STA transitions.
 
 ## Build and install
 
@@ -22,23 +22,25 @@ Install PlatformIO Core and the VS Code PlatformIO extension. This project targe
 ```powershell
 pio run
 pio run -t upload --upload-port COM10
-pio run -t uploadfs --upload-port COM10
 pio device monitor -p COM10 -b 115200
+
+# Optional: upload LittleFS assets that are not embedded in the firmware
+pio run -t uploadfs --upload-port COM10
 ```
 
-Replace `COM10` with the port shown by your computer; no serial port is hardcoded in the project. Build firmware before uploading LittleFS. `partitions.csv` reserves 2.25 MiB for the firmware and 1.6875 MiB for LittleFS on a 4 MiB ESP32. The layout has been checked against the configured `esp32dev` 4 MiB target; verify the capacity of a different board before flashing.
+Replace `COM10` with the port shown by your computer; no serial port is hardcoded in the project. A PlatformIO pre-build script converts `data/index.html` and `data/examples.json` into PROGMEM assets, so the main app, Wi-Fi setup wizard, and example catalogue are served from the firmware image and do not require `uploadfs`. Upload LittleFS only when you add separate runtime assets there. `partitions.csv` reserves 2.25 MiB for the firmware and 1.6875 MiB for LittleFS on a 4 MiB ESP32. The layout has been checked against the configured `esp32dev` 4 MiB target; verify the capacity of a different board before flashing.
 
-After firmware and filesystem upload:
+After firmware upload:
 
 1. Power the ESP32 and connect the phone to `LED-LAB`.
 2. Keep the phone on the AP even if it reports that internet is unavailable, then open `http://192.168.4.1`.
 3. Optionally enter the home router's SSID and password in **Home Wi-Fi**. The device reconnects with these credentials after normal firmware uploads; erasing the ESP32's flash also erases saved credentials.
-4. To access LED LAB through the router, connect the phone or computer to the same home network and open the IP shown in the Wi-Fi panel.
+4. To access LED LAB through the router, connect the phone or computer to the same home network and open `http://ledal.local`; use the DHCP IP shown in the Wi-Fi panel if the client does not resolve mDNS.
 5. Choose an animation from the local library and press **Compile & Run**.
 
 Closing the browser does not stop the ESP32 animation. A browser refresh restores local library/editor state but does not automatically restart the program.
 
-FastLED 3.9.15 is used for WS2812B output and selects its ESP32 RMT transport under this ESP32 Arduino Core. The firmware performs current estimation and brightness limiting before handing GRB-ordered frames to FastLED.
+FastLED 3.9.15 is used for WS2812B output through its default ESP32 RMT5 backend. In this FastLED release, the clockless-SPI backend is not enabled for the classic ESP32-WROOM-32 target, so do not define `FASTLED_ESP32_USE_CLOCKLESS_SPI` for this board. The firmware performs current estimation and brightness limiting before handing GRB-ordered frames to FastLED. The Arduino `loopTask` stack is configured to 16 KiB for the bounded recursive DSL interpreter. The renderer keeps its staging frame outside that stack. DSL numeric calculations use 32-bit floating point, built-in functions and operators are pre-resolved to compact IDs, and function-local variables use fixed slots rather than per-pixel string lookups. Numeric `array(length, initialValue)` state uses compact float storage. The lexer reserves token memory conservatively to reduce large contiguous allocations on a fragmented ESP32-WROOM-32 heap.
 
 ## Animation DSL
 
@@ -98,12 +100,15 @@ Settings are validated and clamped by the device. Error responses include `error
 
 ## Troubleshooting and limitations
 
-- If the page does not load, verify the phone remains connected to the no-internet AP and open `http://192.168.4.1` directly.
+- If the page does not load, verify the phone remains connected to the no-internet AP and open `http://192.168.4.1` directly. The main page is embedded in firmware; LittleFS upload is not required for it.
 - If home Wi-Fi does not connect, check that the router provides 2.4 GHz Wi-Fi and compare its scanned security mode with the router's settings; `LED-LAB` remains available for changing them. The network picker shows the reported RSSI, channel, and WPA mode.
 - The Home Wi-Fi panel and serial monitor report the ESP32 disconnect reason and signal at disconnect. `AUTH_EXPIRE` (2) and `AUTH_LEAVE` (3) do not by themselves prove the password is wrong; `AUTH_FAIL` (202) and handshake timeout reasons are more specific authentication clues. For serial diagnostics, open the monitor at 115200 baud and look for `component:"wifi"` events.
-- If assets are missing, run the LittleFS upload command after building.
+- If a separate runtime asset (not the embedded `index.html`) is missing, run the LittleFS upload command after building and verify the filesystem is mounted in `/api/v1/status`.
 - If no pixels light, verify the selected GPIO, strip direction, common ground, separate supply, level shifter, and strip color order.
-- `OUT_OF_MEMORY` during compilation means the ESP32 could not allocate enough heap for the candidate program; reduce large state arrays or source complexity and retry.
+- If random LEDs flash or colors corrupt while Wi-Fi is active, first verify the selected FastLED transport and the ESP32 target. FastLED 3.9.15 uses RMT5 on the classic ESP32-WROOM-32; its clockless-SPI backend is not enabled for this target. Also verify signal level shifting, a short data wire, common ground, and suitable power distribution.
+- `OUT_OF_MEMORY` during compilation reports both free heap and the largest free block. Numeric `array(...)` state uses compact float storage; if allocation still fails, reduce the number/length of state arrays or source complexity.
+- The serial monitor periodically reports `stackHighWater`, `freeHeap`, and `largestFreeBlock` so stack and heap headroom can be checked while an animation runs.
+- On boot, `component:"system", event:"boot_reset_reason"` reports the ESP32 reset cause and the boot-time free heap/largest block. Use it together with the panic backtrace when diagnosing unexpected reboots.
 - `TIME_LIMIT` means one frame exceeded the runtime's execution budget and was discarded; simplify per-pixel expressions, especially nested math, noise calls, and loops. Lowering target FPS does not make an individual frame cheaper.
 - Serial logs run at 115200 baud. Upload and monitor ports are selected on the command line.
 - 60 FPS is a target, not a guarantee. A 300-pixel WS2812B frame needs about 9 ms of raw wire time before reset/latch time and interpretation.
