@@ -519,10 +519,11 @@
     }
 
     async function api(path, options = {}) {
+      const { timeoutMs = 3500, ...fetchOptions } = options;
       const response = await fetch(path, {
-        ...options,
-        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-        signal: AbortSignal.timeout ? AbortSignal.timeout(3500) : undefined
+        ...fetchOptions,
+        headers: { 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) },
+        signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -743,7 +744,7 @@
         let job;
         do {
           await new Promise(resolve => setTimeout(resolve, 350));
-          job = await api(`/api/v1/jobs/${queued.jobId}`);
+          job = await api(`/api/v1/jobs/${queued.jobId}`, { timeoutMs: 15000 });
         } while (job.status === 'queued');
         if (job.status === 'succeeded') {
           log('ok', 'COMPILE', `${job.animationName || animation.name} is running on the ESP32`);
