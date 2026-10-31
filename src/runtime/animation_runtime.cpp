@@ -719,14 +719,15 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
                               location.line, location.column);
         }
     };
-    if (builtin == BuiltinId::Random) {
+    switch (builtin) {
+        case BuiltinId::Random: {
         return Value::fromNumber(randomUnit());
     }
-    if (builtin == BuiltinId::RandomRange) {
+        case BuiltinId::RandomRange: {
         require(2);
         return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * randomUnit());
     }
-    if (builtin == BuiltinId::Array) {
+        case BuiltinId::Array: {
         require(1);
         const float requestedLength = std::floor(arg(0));
         const int length = static_cast<int>(std::max(0.0f, std::min(
@@ -734,13 +735,13 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
         const float initial = arg(1);
         return Value::fromNumericArray(static_cast<size_t>(length), initial);
     }
-    if (builtin == BuiltinId::Rgb) {
+        case BuiltinId::Rgb: {
         require(3);
         return Value::fromColor(clamped(arg(0), 0, 1),
                                 clamped(arg(1), 0, 1),
                                 clamped(arg(2), 0, 1));
     }
-    if (builtin == BuiltinId::Hsv) {
+        case BuiltinId::Hsv: {
         require(3);
         const float h = std::fmod(std::fmod(arg(0), 1.0f) + 1.0f, 1.0f);
         const float s = arg(1);
@@ -751,7 +752,7 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
         };
         return Value::fromColor(channel(5), channel(3), channel(1));
     }
-    if (builtin == BuiltinId::Mix) {
+        case BuiltinId::Mix: {
         require(3);
         if (args[0].kind == Value::Kind::Color && args[1].kind == Value::Kind::Color) {
             const float amount = arg(2);
@@ -787,7 +788,7 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
         }
         return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * arg(2));
     }
-    if (builtin == BuiltinId::Gradient) {
+        case BuiltinId::Gradient: {
         require(2);
         if (args[1].kind != Value::Kind::Array || !args[1].array || args[1].array->empty()) {
             return Value::fromArray({Value::fromNumber(0), Value::fromNumber(0), Value::fromNumber(0)});
@@ -846,7 +847,7 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
         const Value mixArgs[] = {*leftColor, *rightColor, Value::fromNumber(amount)};
         return callBuiltin(BuiltinId::Mix, "mix", mixArgs, 3, location);
     }
-    if (builtin == BuiltinId::Noise) {
+        case BuiltinId::Noise: {
         require(1);
         const float x = arg(0);
         const float y = arg(1);
@@ -878,51 +879,51 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
                                  (c + (d - c) * u) * v);
     }
 
-    require(1);
-    if (builtin == BuiltinId::Sin) return Value::fromNumber(std::sin(arg(0)));
-    if (builtin == BuiltinId::Cos) return Value::fromNumber(std::cos(arg(0)));
-    if (builtin == BuiltinId::Tan) return Value::fromNumber(std::tan(arg(0)));
-    if (builtin == BuiltinId::Abs) return Value::fromNumber(std::fabs(arg(0)));
-    if (builtin == BuiltinId::Sqrt) return Value::fromNumber(std::sqrt(arg(0)));
-    if (builtin == BuiltinId::Floor) return Value::fromNumber(std::floor(arg(0)));
-    if (builtin == BuiltinId::Ceil) return Value::fromNumber(std::ceil(arg(0)));
-    if (builtin == BuiltinId::Round) return Value::fromNumber(std::round(arg(0)));
-    if (builtin == BuiltinId::Exp) return Value::fromNumber(std::exp(arg(0)));
-    if (builtin == BuiltinId::Log) return Value::fromNumber(std::log(arg(0)));
-    if (builtin == BuiltinId::Pow) {
+        case BuiltinId::Sin: require(1); return Value::fromNumber(std::sin(arg(0)));
+        case BuiltinId::Cos: require(1); return Value::fromNumber(std::cos(arg(0)));
+        case BuiltinId::Tan: require(1); return Value::fromNumber(std::tan(arg(0)));
+        case BuiltinId::Abs: require(1); return Value::fromNumber(std::fabs(arg(0)));
+        case BuiltinId::Sqrt: require(1); return Value::fromNumber(std::sqrt(arg(0)));
+        case BuiltinId::Floor: require(1); return Value::fromNumber(std::floor(arg(0)));
+        case BuiltinId::Ceil: require(1); return Value::fromNumber(std::ceil(arg(0)));
+        case BuiltinId::Round: require(1); return Value::fromNumber(std::round(arg(0)));
+        case BuiltinId::Exp: require(1); return Value::fromNumber(std::exp(arg(0)));
+        case BuiltinId::Log: require(1); return Value::fromNumber(std::log(arg(0)));
+        case BuiltinId::Pow: {
         require(2);
         return Value::fromNumber(std::pow(arg(0), arg(1)));
     }
-    if (builtin == BuiltinId::Atan2) {
+        case BuiltinId::Atan2: {
         require(2);
         return Value::fromNumber(std::atan2(arg(0), arg(1)));
     }
-    if (builtin == BuiltinId::Min || builtin == BuiltinId::Max) {
+        case BuiltinId::Min:
+        case BuiltinId::Max: {
         float result = arg(0);
         for (size_t i = 1; i < count; ++i) {
             result = builtin == BuiltinId::Min ? std::min(result, arg(i)) : std::max(result, arg(i));
         }
         return Value::fromNumber(result);
     }
-    if (builtin == BuiltinId::Fract) return Value::fromNumber(arg(0) - std::floor(arg(0)));
-    if (builtin == BuiltinId::Clamp) {
+        case BuiltinId::Fract: require(1); return Value::fromNumber(arg(0) - std::floor(arg(0)));
+        case BuiltinId::Clamp: {
         require(3);
         return Value::fromNumber(std::max(arg(1), std::min(arg(2), arg(0))));
     }
-    if (builtin == BuiltinId::Lerp) {
+        case BuiltinId::Lerp: {
         require(3);
         return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * arg(2));
     }
-    if (builtin == BuiltinId::Smoothstep) {
+        case BuiltinId::Smoothstep: {
         require(3);
         const float span = arg(1) - arg(0);
         const float t = span == 0 ? 0 : clamped((arg(2) - arg(0)) / span, 0, 1);
         return Value::fromNumber(t * t * (3 - 2 * t));
     }
-    throw SourceError("UNKNOWN_FUNCTION", "Unknown function: " + name,
-                      location.line, location.column);
-}
-
+        default:
+            throw SourceError("UNKNOWN_FUNCTION", "Unknown function: " + name,
+                              location.line, location.column);
+    }
 Value evaluate(const Node& node, Environment& environment, Budget& budget) {
     budget.consume(node.location);
     switch (node.kind) {
@@ -953,33 +954,39 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
             const Value right = evaluate(*node.children[1], environment, budget);
             const float a = numberOf(left);
             const float b = numberOf(right);
-            if (node.binaryOp == BinaryOp::Add) return numericOrStringPlus(left, right);
-            if (node.binaryOp == BinaryOp::Subtract) return Value::fromNumber(a - b);
-            if (node.binaryOp == BinaryOp::Multiply) return Value::fromNumber(a * b);
-            if (node.binaryOp == BinaryOp::Divide) return Value::fromNumber(b == 0 ? 0 : a / b);
-            if (node.binaryOp == BinaryOp::Modulo) return Value::fromNumber(b == 0 ? 0 : std::fmod(a, b));
-            if (node.binaryOp == BinaryOp::Power) return Value::fromNumber(std::pow(a, b));
-            if (node.binaryOp == BinaryOp::Less) return Value::fromBoolean(a < b);
-            if (node.binaryOp == BinaryOp::Greater) return Value::fromBoolean(a > b);
-            if (node.binaryOp == BinaryOp::LessEqual) return Value::fromBoolean(a <= b);
-            if (node.binaryOp == BinaryOp::GreaterEqual) return Value::fromBoolean(a >= b);
-            if (node.binaryOp == BinaryOp::Equal || node.binaryOp == BinaryOp::NotEqual) {
-                bool equal = false;
-                if (left.kind == right.kind) {
-                    if (left.kind == Value::Kind::String) equal = left.string == right.string;
-                    else if (left.kind == Value::Kind::Boolean) equal = left.boolean == right.boolean;
-                    else if (left.kind == Value::Kind::Number) equal = a == b;
-                    else if (left.kind == Value::Kind::Color) {
-                        equal = left.color[0] == right.color[0] &&
-                                left.color[1] == right.color[1] &&
-                                left.color[2] == right.color[2];
-                    } else equal = left.array == right.array &&
-                                  left.numericArray == right.numericArray;
+            switch (node.binaryOp) {
+                case BinaryOp::Add: return numericOrStringPlus(left, right);
+                case BinaryOp::Subtract: return Value::fromNumber(a - b);
+                case BinaryOp::Multiply: return Value::fromNumber(a * b);
+                case BinaryOp::Divide: return Value::fromNumber(b == 0 ? 0 : a / b);
+                case BinaryOp::Modulo: return Value::fromNumber(b == 0 ? 0 : std::fmod(a, b));
+                case BinaryOp::Power: return Value::fromNumber(std::pow(a, b));
+                case BinaryOp::Less: return Value::fromBoolean(a < b);
+                case BinaryOp::Greater: return Value::fromBoolean(a > b);
+                case BinaryOp::LessEqual: return Value::fromBoolean(a <= b);
+                case BinaryOp::GreaterEqual: return Value::fromBoolean(a >= b);
+                case BinaryOp::Equal:
+                case BinaryOp::NotEqual: {
+                    bool equal = false;
+                    if (left.kind == right.kind) {
+                        if (left.kind == Value::Kind::String) equal = left.string == right.string;
+                        else if (left.kind == Value::Kind::Boolean) equal = left.boolean == right.boolean;
+                        else if (left.kind == Value::Kind::Number) equal = a == b;
+                        else if (left.kind == Value::Kind::Color) {
+                            equal = left.color[0] == right.color[0] &&
+                                    left.color[1] == right.color[1] &&
+                                    left.color[2] == right.color[2];
+                        } else {
+                            equal = left.array == right.array &&
+                                    left.numericArray == right.numericArray;
+                        }
+                    }
+                    return Value::fromBoolean(node.binaryOp == BinaryOp::Equal ? equal : !equal);
                 }
-                return Value::fromBoolean(node.binaryOp == BinaryOp::Equal ? equal : !equal);
+                case BinaryOp::And: return Value::fromBoolean(truthy(left) && truthy(right));
+                case BinaryOp::Or: return Value::fromBoolean(truthy(left) || truthy(right));
+                default: break;
             }
-            if (node.binaryOp == BinaryOp::And) return Value::fromBoolean(truthy(left) && truthy(right));
-            if (node.binaryOp == BinaryOp::Or) return Value::fromBoolean(truthy(left) || truthy(right));
             break;
         }
         case Node::Kind::Index: {
