@@ -284,9 +284,9 @@ public:
 
     std::vector<Token> tokenize() {
         std::vector<Token> tokens;
-        // Source bytes include whitespace and comments; source/4 grossly
-        // over-reserves Token storage for real animation scripts.
-        tokens.reserve(std::min<size_t>(source_.size() / 12 + 64, 768));
+        // Source bytes include whitespace and comments. Keep the initial
+        // allocation small on fragmented ESP32 heaps; grow only if required.
+        tokens.reserve(std::min<size_t>(source_.size() / 24 + 48, 512));
         while (position_ < source_.size()) {
             const char c = source_[position_];
             if (c == '\n') {
