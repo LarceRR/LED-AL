@@ -170,7 +170,7 @@ Value arrayElement(const Value& value, size_t index) {
     return (*value.array)[index];
 }
 
-void setArrayElement(Value& value, size_t index, const Value& element) {
+void setArrayElement(const Value& value, size_t index, const Value& element) {
     if (value.numericArray) {
         (*value.numericArray)[index] = numberOf(element);
     } else {
@@ -680,7 +680,7 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
     }
     if (name == "array") {
         require(1);
-        const float requestedLength = std::std::floor(arg(0));
+        const float requestedLength = std::floor(arg(0));
         const int length = static_cast<int>(std::max(0.0f, std::min(
             static_cast<float>(config::MAX_ARRAY_LENGTH), requestedLength)));
         const float initial = arg(1);
@@ -694,11 +694,11 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
     }
     if (name == "hsv") {
         require(3);
-        const float h = std::std::fmod(std::std::fmod(arg(0), 1.0f) + 1.0f, 1.0f);
+        const float h = std::fmod(std::fmod(arg(0), 1.0f) + 1.0f, 1.0f);
         const float s = arg(1);
         const float v = arg(2);
         const auto channel = [h, s, v](float n) {
-            const float k = std::std::fmod(n + h * 6.0f, 6.0f);
+            const float k = std::fmod(n + h * 6.0f, 6.0f);
             return v - v * s * std::max(0.0f, std::min(std::min(k, 4.0f - k), 1.0f));
         };
         return Value::fromColor(channel(5), channel(3), channel(1));
@@ -806,7 +806,7 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         const float floorY = std::floor(y);
         const auto toUint32 = [](float value) {
             if (!std::isfinite(value)) return uint32_t{0};
-            float wrapped = std::std::fmod(std::std::trunc(value), 4294967296.0f);
+            float wrapped = std::fmod(std::trunc(value), 4294967296.0f);
             if (wrapped < 0.0f) wrapped += 4294967296.0f;
             return static_cast<uint32_t>(wrapped);
         };
