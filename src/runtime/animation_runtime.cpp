@@ -20,6 +20,55 @@ namespace {
 
 enum class TokenKind : uint8_t { Number, String, Identifier, Operator, End };
 
+enum class BuiltinId : uint8_t { Unknown, Random, RandomRange, Array, Rgb, Hsv, Mix, Gradient, Noise, Sin, Cos, Tan, Abs, Sqrt, Floor, Ceil, Round, Exp, Log, Pow, Atan2, Min, Max, Fract, Clamp, Lerp, Smoothstep };
+enum class BinaryOp : uint8_t { Unknown, Add, Subtract, Multiply, Divide, Modulo, Power, Less, Greater, LessEqual, GreaterEqual, Equal, NotEqual, And, Or };
+BuiltinId builtinIdFor(const std::string& name) {
+    if (name == "random") return BuiltinId::Random;
+    if (name == "randomRange") return BuiltinId::RandomRange;
+    if (name == "array") return BuiltinId::Array;
+    if (name == "rgb") return BuiltinId::Rgb;
+    if (name == "hsv") return BuiltinId::Hsv;
+    if (name == "mix") return BuiltinId::Mix;
+    if (name == "gradient") return BuiltinId::Gradient;
+    if (name == "noise") return BuiltinId::Noise;
+    if (name == "sin") return BuiltinId::Sin;
+    if (name == "cos") return BuiltinId::Cos;
+    if (name == "tan") return BuiltinId::Tan;
+    if (name == "abs") return BuiltinId::Abs;
+    if (name == "sqrt") return BuiltinId::Sqrt;
+    if (name == "floor") return BuiltinId::Floor;
+    if (name == "ceil") return BuiltinId::Ceil;
+    if (name == "round") return BuiltinId::Round;
+    if (name == "exp") return BuiltinId::Exp;
+    if (name == "log") return BuiltinId::Log;
+    if (name == "pow") return BuiltinId::Pow;
+    if (name == "atan2") return BuiltinId::Atan2;
+    if (name == "min") return BuiltinId::Min;
+    if (name == "max") return BuiltinId::Max;
+    if (name == "fract") return BuiltinId::Fract;
+    if (name == "clamp") return BuiltinId::Clamp;
+    if (name == "lerp") return BuiltinId::Lerp;
+    if (name == "smoothstep") return BuiltinId::Smoothstep;
+    return BuiltinId::Unknown;
+}
+BinaryOp binaryOpFor(const std::string& op) {
+    if (op == "+") return BinaryOp::Add;
+    if (op == "-") return BinaryOp::Subtract;
+    if (op == "*") return BinaryOp::Multiply;
+    if (op == "/") return BinaryOp::Divide;
+    if (op == "%") return BinaryOp::Modulo;
+    if (op == "^") return BinaryOp::Power;
+    if (op == "<") return BinaryOp::Less;
+    if (op == ">") return BinaryOp::Greater;
+    if (op == "<=") return BinaryOp::LessEqual;
+    if (op == ">=") return BinaryOp::GreaterEqual;
+    if (op == "==") return BinaryOp::Equal;
+    if (op == "!=") return BinaryOp::NotEqual;
+    if (op == "&&") return BinaryOp::And;
+    if (op == "||") return BinaryOp::Or;
+    return BinaryOp::Unknown;
+}
+
 struct Token {
     TokenKind kind = TokenKind::End;
     std::string text;
@@ -97,7 +146,6 @@ struct SourceLocation {
 struct LocalEntry {
     const std::string* name = nullptr;
     Value value;
-    uint32_t generation = 0;
 };
 
 struct Workspace {
@@ -105,36 +153,31 @@ struct Workspace {
     std::array<Value, config::MAX_BUILTIN_ARGUMENTS> arguments{};
     size_t localCount = 0;
     size_t argumentTop = 0;
-    uint32_t generation = 0;
 
+    // Locals never escape a single update() or render(i) invocation.
     void beginScope() {
-        ++generation;
-        if (generation == 0) {
-            for (LocalEntry& entry : locals) entry.generation = 0;
-            generation = 1;
-        }
+        localCount = 0;
         argumentTop = 0;
     }
     Value* findLocal(const std::string& name) {
         for (size_t i = 0; i < localCount; ++i) {
             LocalEntry& entry = locals[i];
-            if (entry.generation == generation && *entry.name == name) return &entry.value;
+            if (entry.name && *entry.name == name) return &entry.value;
         }
         return nullptr;
     }
     const Value* findLocal(const std::string& name) const {
         for (size_t i = 0; i < localCount; ++i) {
             const LocalEntry& entry = locals[i];
-            if (entry.generation == generation && *entry.name == name) return &entry.value;
+            if (entry.name && *entry.name == name) return &entry.value;
         }
         return nullptr;
     }
     void setLocal(const std::string& name, Value value, SourceLocation location) {
         for (size_t i = 0; i < localCount; ++i) {
             LocalEntry& entry = locals[i];
-            if (*entry.name == name) {
+            if (entry.name && *entry.name == name) {
                 entry.value = std::move(value);
-                entry.generation = generation;
                 return;
             }
         }
@@ -145,7 +188,6 @@ struct Workspace {
         LocalEntry& entry = locals[localCount++];
         entry.name = &name;
         entry.value = std::move(value);
-        entry.generation = generation;
     }
 };
 
@@ -204,6 +246,8 @@ struct Node {
     float number = 0.0f;
     bool boolean = false;
     char operation = 0;
+    BuiltinId builtin = BuiltinId::Unknown;
+    BinaryOp binaryOp = BinaryOp::Unknown;
     std::string text;
     std::string auxiliary;
     std::vector<std::unique_ptr<Node>> children;
@@ -467,6 +511,7 @@ private:
         if (check("=") || check("+=") || check("-=") || check("*=") || check("/=")) {
             Token operation = tokens_[position_++];
             NodePtr node = make(Node::Kind::Assign, operation);
+            node->operation = operation.text[0];
             node->text = operation.text;
             node->children.push_back(std::move(target));
             node->children.push_back(expression());
@@ -529,6 +574,7 @@ private:
             if (current <= minimum) break;
             const Token operation = tokens_[position_++];
             NodePtr binary = make(Node::Kind::Binary, operation);
+            binary->binaryOp = binaryOpFor(operation.text);
             binary->text = operation.text;
             binary->children.push_back(std::move(left));
             binary->children.push_back(expression(current - (operation.text == "^" ? 1 : 0), depth + 1));
@@ -553,6 +599,7 @@ private:
             node->boolean = token.text == "true";
         } else if (token.text == "-" || token.text == "!") {
             node = make(Node::Kind::Unary, token);
+            node->operation = token.text[0];
             node->text = token.text;
             node->children.push_back(expression(7, depth + 1));
         } else if (token.text == "(") {
@@ -580,6 +627,7 @@ private:
                 }
                 NodePtr call = make(Node::Kind::Call, token);
                 call->text = node->text;
+                call->builtin = builtinIdFor(call->text);
                 if (!check(")")) {
                     do {
                         call->children.push_back(expression(0, depth + 1));
@@ -659,8 +707,8 @@ float randomUnit() {
     return static_cast<float>(esp_random() >> 8U) * (1.0f / 16777216.0f);
 }
 
-Value callBuiltin(const std::string& name, const Value* args, size_t count,
-                  SourceLocation location) {
+Value callBuiltin(BuiltinId builtin, const std::string& name,
+                  const Value* args, size_t count, SourceLocation location) {
     const auto arg = [args, count](size_t index, float fallback = 0.0f) {
         return index < count ? numberOf(args[index]) : fallback;
     };
@@ -671,14 +719,14 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
                               location.line, location.column);
         }
     };
-    if (name == "random") {
+    if (builtin == BuiltinId::Random) {
         return Value::fromNumber(randomUnit());
     }
-    if (name == "randomRange") {
+    if (builtin == BuiltinId::RandomRange) {
         require(2);
         return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * randomUnit());
     }
-    if (name == "array") {
+    if (builtin == BuiltinId::Array) {
         require(1);
         const float requestedLength = std::floor(arg(0));
         const int length = static_cast<int>(std::max(0.0f, std::min(
@@ -686,13 +734,13 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         const float initial = arg(1);
         return Value::fromNumericArray(static_cast<size_t>(length), initial);
     }
-    if (name == "rgb") {
+    if (builtin == BuiltinId::Rgb) {
         require(3);
         return Value::fromColor(clamped(arg(0), 0, 1),
                                 clamped(arg(1), 0, 1),
                                 clamped(arg(2), 0, 1));
     }
-    if (name == "hsv") {
+    if (builtin == BuiltinId::Hsv) {
         require(3);
         const float h = std::fmod(std::fmod(arg(0), 1.0f) + 1.0f, 1.0f);
         const float s = arg(1);
@@ -703,7 +751,7 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         };
         return Value::fromColor(channel(5), channel(3), channel(1));
     }
-    if (name == "mix") {
+    if (builtin == BuiltinId::Mix) {
         require(3);
         if (args[0].kind == Value::Kind::Color && args[1].kind == Value::Kind::Color) {
             const float amount = arg(2);
@@ -739,7 +787,7 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         }
         return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * arg(2));
     }
-    if (name == "gradient") {
+    if (builtin == BuiltinId::Gradient) {
         require(2);
         if (args[1].kind != Value::Kind::Array || !args[1].array || args[1].array->empty()) {
             return Value::fromArray({Value::fromNumber(0), Value::fromNumber(0), Value::fromNumber(0)});
@@ -796,9 +844,9 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
         const float span = upper - lower;
         const float amount = span == 0 ? 0 : (position - lower) / span;
         const Value mixArgs[] = {*leftColor, *rightColor, Value::fromNumber(amount)};
-        return callBuiltin("mix", mixArgs, 3, location);
+        return callBuiltin(BuiltinId::Mix, "mix", mixArgs, 3, location);
     }
-    if (name == "noise") {
+    if (builtin == BuiltinId::Noise) {
         require(1);
         const float x = arg(0);
         const float y = arg(1);
@@ -831,41 +879,41 @@ Value callBuiltin(const std::string& name, const Value* args, size_t count,
     }
 
     require(1);
-    if (name == "sin") return Value::fromNumber(std::sin(arg(0)));
-    if (name == "cos") return Value::fromNumber(std::cos(arg(0)));
-    if (name == "tan") return Value::fromNumber(std::tan(arg(0)));
-    if (name == "abs") return Value::fromNumber(std::fabs(arg(0)));
-    if (name == "sqrt") return Value::fromNumber(std::sqrt(arg(0)));
-    if (name == "floor") return Value::fromNumber(std::floor(arg(0)));
-    if (name == "ceil") return Value::fromNumber(std::ceil(arg(0)));
-    if (name == "round") return Value::fromNumber(std::round(arg(0)));
-    if (name == "exp") return Value::fromNumber(std::exp(arg(0)));
-    if (name == "log") return Value::fromNumber(std::log(arg(0)));
-    if (name == "pow") {
+    if (builtin == BuiltinId::Sin) return Value::fromNumber(std::sin(arg(0)));
+    if (builtin == BuiltinId::Cos) return Value::fromNumber(std::cos(arg(0)));
+    if (builtin == BuiltinId::Tan) return Value::fromNumber(std::tan(arg(0)));
+    if (builtin == BuiltinId::Abs) return Value::fromNumber(std::fabs(arg(0)));
+    if (builtin == BuiltinId::Sqrt) return Value::fromNumber(std::sqrt(arg(0)));
+    if (builtin == BuiltinId::Floor) return Value::fromNumber(std::floor(arg(0)));
+    if (builtin == BuiltinId::Ceil) return Value::fromNumber(std::ceil(arg(0)));
+    if (builtin == BuiltinId::Round) return Value::fromNumber(std::round(arg(0)));
+    if (builtin == BuiltinId::Exp) return Value::fromNumber(std::exp(arg(0)));
+    if (builtin == BuiltinId::Log) return Value::fromNumber(std::log(arg(0)));
+    if (builtin == BuiltinId::Pow) {
         require(2);
         return Value::fromNumber(std::pow(arg(0), arg(1)));
     }
-    if (name == "atan2") {
+    if (builtin == BuiltinId::Atan2) {
         require(2);
         return Value::fromNumber(std::atan2(arg(0), arg(1)));
     }
-    if (name == "min" || name == "max") {
+    if (builtin == BuiltinId::Min || builtin == BuiltinId::Max) {
         float result = arg(0);
         for (size_t i = 1; i < count; ++i) {
-            result = name == "min" ? std::min(result, arg(i)) : std::max(result, arg(i));
+            result = builtin == BuiltinId::Min ? std::min(result, arg(i)) : std::max(result, arg(i));
         }
         return Value::fromNumber(result);
     }
-    if (name == "fract") return Value::fromNumber(arg(0) - std::floor(arg(0)));
-    if (name == "clamp") {
+    if (builtin == BuiltinId::Fract) return Value::fromNumber(arg(0) - std::floor(arg(0)));
+    if (builtin == BuiltinId::Clamp) {
         require(3);
         return Value::fromNumber(std::max(arg(1), std::min(arg(2), arg(0))));
     }
-    if (name == "lerp") {
+    if (builtin == BuiltinId::Lerp) {
         require(3);
         return Value::fromNumber(arg(0) + (arg(1) - arg(0)) * arg(2));
     }
-    if (name == "smoothstep") {
+    if (builtin == BuiltinId::Smoothstep) {
         require(3);
         const float span = arg(1) - arg(0);
         const float t = span == 0 ? 0 : clamped((arg(2) - arg(0)) / span, 0, 1);
@@ -891,8 +939,8 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
         }
         case Node::Kind::Unary: {
             const Value value = evaluate(*node.children[0], environment, budget);
-            return node.text == "-" ? Value::fromNumber(-numberOf(value))
-                                    : Value::fromBoolean(!truthy(value));
+            return node.operation == '-' ? Value::fromNumber(-numberOf(value))
+                                          : Value::fromBoolean(!truthy(value));
         }
         case Node::Kind::Conditional: {
             const Value condition = evaluate(*node.children[0], environment, budget);
@@ -900,22 +948,22 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
         }
         case Node::Kind::Binary: {
             const Value left = evaluate(*node.children[0], environment, budget);
-            if (node.text == "&&" && !truthy(left)) return Value::fromBoolean(false);
-            if (node.text == "||" && truthy(left)) return Value::fromBoolean(true);
+            if (node.binaryOp == BinaryOp::And && !truthy(left)) return Value::fromBoolean(false);
+            if (node.binaryOp == BinaryOp::Or && truthy(left)) return Value::fromBoolean(true);
             const Value right = evaluate(*node.children[1], environment, budget);
             const float a = numberOf(left);
             const float b = numberOf(right);
-            if (node.text == "+") return numericOrStringPlus(left, right);
-            if (node.text == "-") return Value::fromNumber(a - b);
-            if (node.text == "*") return Value::fromNumber(a * b);
-            if (node.text == "/") return Value::fromNumber(b == 0 ? 0 : a / b);
-            if (node.text == "%") return Value::fromNumber(b == 0 ? 0 : std::fmod(a, b));
-            if (node.text == "^") return Value::fromNumber(std::pow(a, b));
-            if (node.text == "<") return Value::fromBoolean(a < b);
-            if (node.text == ">") return Value::fromBoolean(a > b);
-            if (node.text == "<=") return Value::fromBoolean(a <= b);
-            if (node.text == ">=") return Value::fromBoolean(a >= b);
-            if (node.text == "==" || node.text == "!=") {
+            if (node.binaryOp == BinaryOp::Add) return numericOrStringPlus(left, right);
+            if (node.binaryOp == BinaryOp::Subtract) return Value::fromNumber(a - b);
+            if (node.binaryOp == BinaryOp::Multiply) return Value::fromNumber(a * b);
+            if (node.binaryOp == BinaryOp::Divide) return Value::fromNumber(b == 0 ? 0 : a / b);
+            if (node.binaryOp == BinaryOp::Modulo) return Value::fromNumber(b == 0 ? 0 : std::fmod(a, b));
+            if (node.binaryOp == BinaryOp::Power) return Value::fromNumber(std::pow(a, b));
+            if (node.binaryOp == BinaryOp::Less) return Value::fromBoolean(a < b);
+            if (node.binaryOp == BinaryOp::Greater) return Value::fromBoolean(a > b);
+            if (node.binaryOp == BinaryOp::LessEqual) return Value::fromBoolean(a <= b);
+            if (node.binaryOp == BinaryOp::GreaterEqual) return Value::fromBoolean(a >= b);
+            if (node.binaryOp == BinaryOp::Equal || node.binaryOp == BinaryOp::NotEqual) {
                 bool equal = false;
                 if (left.kind == right.kind) {
                     if (left.kind == Value::Kind::String) equal = left.string == right.string;
@@ -928,10 +976,10 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
                     } else equal = left.array == right.array &&
                                   left.numericArray == right.numericArray;
                 }
-                return Value::fromBoolean(node.text == "==" ? equal : !equal);
+                return Value::fromBoolean(node.binaryOp == BinaryOp::Equal ? equal : !equal);
             }
-            if (node.text == "&&") return Value::fromBoolean(truthy(left) && truthy(right));
-            if (node.text == "||") return Value::fromBoolean(truthy(left) || truthy(right));
+            if (node.binaryOp == BinaryOp::And) return Value::fromBoolean(truthy(left) && truthy(right));
+            if (node.binaryOp == BinaryOp::Or) return Value::fromBoolean(truthy(left) || truthy(right));
             break;
         }
         case Node::Kind::Index: {
@@ -964,7 +1012,7 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
                 environment.workspace.arguments[base + i] =
                     evaluate(*node.children[i], environment, budget);
             }
-            const Value result = callBuiltin(node.text,
+            const Value result = callBuiltin(node.builtin, node.text,
                 environment.workspace.arguments.data() + base,
                 node.children.size(), node.location);
             environment.workspace.argumentTop = base;
@@ -976,14 +1024,14 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
                       node.location.line, node.location.column);
 }
 
-Value applyAssignment(const std::string& operation, const Value& previous, const Value& value) {
-    if (operation == "=") return value;
-    if (operation == "+=") return numericOrStringPlus(previous, value);
+Value applyAssignment(char operation, const Value& previous, const Value& value) {
+    if (operation == '=') return value;
+    if (operation == '+') return numericOrStringPlus(previous, value);
     const float left = numberOf(previous);
     const float right = numberOf(value);
-    if (operation == "-=") return Value::fromNumber(left - right);
-    if (operation == "*=") return Value::fromNumber(left * right);
-    if (operation == "/=") return Value::fromNumber(right == 0 ? 0 : left / right);
+    if (operation == '-') return Value::fromNumber(left - right);
+    if (operation == '*') return Value::fromNumber(left * right);
+    if (operation == '/') return Value::fromNumber(right == 0 ? 0 : left / right);
     return value;
 }
 
@@ -1021,7 +1069,7 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
             if (target.kind == Node::Kind::Variable) {
                 const Value previous = resolveVariable(target.text, environment, target.location);
                 environment.workspace.setLocal(target.text,
-                    applyAssignment(node.text, previous, value), target.location);
+                    applyAssignment(node.operation, previous, value), target.location);
                 return {};
             }
             if (target.kind == Node::Kind::Index) {
@@ -1034,7 +1082,7 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
                                       target.location.line, target.location.column);
                 }
                 const size_t index = static_cast<size_t>(indexValue);
-                Value result = applyAssignment(node.text, arrayElement(base, index), value);
+                Value result = applyAssignment(node.operation, arrayElement(base, index), value);
                 setArrayElement(base, index, result);
                 return {};
             }
@@ -1059,7 +1107,7 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
                 const Value oldValue = resolveVariable(node.auxiliary, environment, node.location);
                 const Value step = evaluate(*node.children[2], environment, budget);
                 environment.workspace.setLocal(node.auxiliary,
-                    applyAssignment(node.operation == '+' ? "+=" : "-=", oldValue, step), node.location);
+                    applyAssignment(node.operation, oldValue, step), node.location);
             }
             return {};
         }
