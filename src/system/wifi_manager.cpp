@@ -31,6 +31,7 @@ void logWifi(const char* level, const char* event, const char* message = nullptr
         Serial.printf(",\"message\":\"%s\"", message);
     }
     Serial.println("}");
+    Serial.flush();
 }
 
 }  // namespace
@@ -46,29 +47,61 @@ bool WifiManager::hasCredentials() const {
 }
 
 void WifiManager::configureRadio() {
-    if (!WiFi.setSleep(false)) {
+    logWifi("info", "radio_sleep_setting_begin");
+    const bool sleepConfigured = WiFi.setSleep(false);
+    Serial.printf(
+        "{\"level\":\"info\",\"component\":\"wifi\",\"event\":\"radio_sleep_setting_complete\",\"success\":%s}\n",
+        sleepConfigured ? "true" : "false");
+    Serial.flush();
+    if (!sleepConfigured) {
         logWifi("warning", "sleep_setting_failed", "Could not disable Wi-Fi power saving");
     }
-    if (!WiFi.setTxPower(WIFI_POWER_19_5dBm)) {
+
+    logWifi("info", "radio_tx_power_setting_begin");
+    const bool txPowerConfigured = WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    Serial.printf(
+        "{\"level\":\"info\",\"component\":\"wifi\",\"event\":\"radio_tx_power_setting_complete\",\"success\":%s}\n",
+        txPowerConfigured ? "true" : "false");
+    Serial.flush();
+    if (!txPowerConfigured) {
         logWifi("warning", "tx_power_setting_failed", "Could not set requested TX power");
     }
+
+    logWifi("info", "radio_auto_reconnect_setting_begin");
     WiFi.setAutoReconnect(false);
+    logWifi("info", "radio_auto_reconnect_setting_complete");
 }
 
 bool WifiManager::begin() {
+    logWifi("info", "manager_begin");
+
     // The DHCP hostname must be set before Wi-Fi mode or interfaces are started.
-    if (!WiFi.setHostname(config::MDNS_HOSTNAME)) {
+    logWifi("info", "hostname_setting_begin");
+    const bool hostnameSet = WiFi.setHostname(config::MDNS_HOSTNAME);
+    Serial.printf(
+        "{\"level\":\"info\",\"component\":\"wifi\",\"event\":\"hostname_setting_complete\",\"success\":%s}\n",
+        hostnameSet ? "true" : "false");
+    Serial.flush();
+    if (!hostnameSet) {
         logWifi("error", "hostname_failed", "Could not set DHCP hostname");
     }
 
     // Reconnects are scheduled here, not delegated to an unbounded driver retry loop.
     if (hasCredentials()) {
-        WiFi.mode(WIFI_STA);
+        logWifi("info", "station_mode_setting_begin");
+        const bool stationModeSet = WiFi.mode(WIFI_STA);
+        Serial.printf(
+            "{\"level\":\"info\",\"component\":\"wifi\",\"event\":\"station_mode_setting_complete\",\"success\":%s}\n",
+            stationModeSet ? "true" : "false");
+        Serial.flush();
+
         configureRadio();
         diagnostics_.state.store(WifiConnectionState::Connecting);
         currentProfileIndex_ = 0;
+        logWifi("info", "station_begin_call");
         WiFi.begin(credentials_.networks[currentProfileIndex_].ssid,
                    credentials_.networks[currentProfileIndex_].password);
+        logWifi("info", "station_begin_returned");
         stationStarted_ = true;
         stationAttemptStartedAtMs_ = millis();
         nextRetryAtMs_ = stationAttemptStartedAtMs_ + 1500;
