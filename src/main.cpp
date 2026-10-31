@@ -9,6 +9,7 @@
 #include <mutex>
 
 #include <esp_heap_caps.h>
+#include <esp_system.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -33,6 +34,22 @@ ledlab::WifiManager wifiManager(wifiCredentials, wifiDiagnostics);
 ledlab::WebServerApp web(runtime, leds, settings, metrics, wifiCredentials,
                          wifiDiagnostics, wifiManager);
 std::array<ledlab::Rgb, ledlab::config::LED_COUNT> frameBuffer{};
+
+const char* resetReasonName(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON: return "power_on";
+        case ESP_RST_EXT: return "external_reset";
+        case ESP_RST_SW: return "software_reset";
+        case ESP_RST_PANIC: return "panic";
+        case ESP_RST_INT_WDT: return "interrupt_watchdog";
+        case ESP_RST_TASK_WDT: return "task_watchdog";
+        case ESP_RST_WDT: return "watchdog";
+        case ESP_RST_DEEPSLEEP: return "deep_sleep";
+        case ESP_RST_BROWNOUT: return "brownout";
+        case ESP_RST_SDIO: return "sdio";
+        default: return "unknown";
+    }
+}
 
 void logLine(const char* level, const char* message) {
     Serial.printf("{\"level\":\"%s\",\"component\":\"system\",\"message\":\"%s\"}\n",
@@ -167,6 +184,11 @@ void setup() {
     Serial.begin(115200);
     delay(50);
     Serial.printf("\nLED LAB %s starting\n", LEDLAB_FIRMWARE_VERSION);
+    const esp_reset_reason_t resetReason = esp_reset_reason();
+    Serial.printf("{\"level\":\"info\",\"component\":\"system\",\"event\":\"boot_reset_reason\",\"reason\":%u,\"reasonName\":\"%s\",\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+                  static_cast<unsigned>(resetReason), resetReasonName(resetReason),
+                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
     WiFi.onEvent(onWifiEvent);
 
     if (!leds.begin()) {
