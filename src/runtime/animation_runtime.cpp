@@ -870,11 +870,10 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
         const uint32_t iy = toUint32(floorY);
         const float fx = x - floorX;
         const float fy = y - floorY;
-        constexpr float inverseUint32Max = 1.0f / 4294967295.0f;
         const auto hash = [](uint32_t a, uint32_t b) {
             uint32_t n = a * 374761393U + b * 668265263U;
             n = (n ^ (n >> 13U)) * 1274126177U;
-            return static_cast<float>(n ^ (n >> 16U)) * inverseUint32Max;
+            return static_cast<float>(n ^ (n >> 16U)) * (1.0f / 4294967295.0f);
         };
         const auto fade = [](float value) { return value * value * (3 - 2 * value); };
         const float a = hash(ix, iy);
