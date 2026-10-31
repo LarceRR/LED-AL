@@ -939,14 +939,11 @@ Value evaluate(const Node& node, Environment& environment, Budget& budget) {
                 }
                 return Value::fromNumber(base.color[static_cast<size_t>(indexValue)]);
             }
-            if (!std::isfinite(indexValue) || indexValue < 0 ||
-                indexValue > static_cast<float>(std::numeric_limits<int>::max())) {
+            if (!isArrayValue(base) || !std::isfinite(indexValue) ||
+                indexValue < 0 || indexValue >= static_cast<float>(arrayLength(base))) {
                 return Value::fromNumber(0);
             }
-            const int index = static_cast<int>(indexValue);
-            if (!isArrayValue(base) || index < 0 ||
-                static_cast<size_t>(index) >= arrayLength(base)) return Value::fromNumber(0);
-            return arrayElement(base, static_cast<size_t>(index));
+            return arrayElement(base, static_cast<size_t>(indexValue));
         }
         case Node::Kind::Call: {
             if (node.children.size() > environment.workspace.arguments.size()) {
@@ -1027,19 +1024,14 @@ ExecResult execute(const Node& node, Environment& environment, Budget& budget) {
                 const Value base = evaluate(*target.children[0], environment, budget);
                 const float indexValue = std::floor(numberOf(
                     evaluate(*target.children[1], environment, budget)));
-                if (!std::isfinite(indexValue) || indexValue < 0 ||
-                    indexValue > static_cast<float>(std::numeric_limits<int>::max())) {
-                    throw SourceError("ARRAY_BOUNDS", "Array index out of bounds",
-                                          target.location.line, target.location.column);
-                }
-                const int index = static_cast<int>(indexValue);
-                if (!isArrayValue(base) || index < 0 ||
-                    static_cast<size_t>(index) >= arrayLength(base)) {
+                if (!isArrayValue(base) || !std::isfinite(indexValue) ||
+                    indexValue < 0 || indexValue >= static_cast<float>(arrayLength(base))) {
                     throw SourceError("ARRAY_BOUNDS", "Array index out of bounds",
                                       target.location.line, target.location.column);
                 }
-                Value result = applyAssignment(node.text, arrayElement(base, static_cast<size_t>(index)), value);
-                setArrayElement(base, static_cast<size_t>(index), result);
+                const size_t index = static_cast<size_t>(indexValue);
+                Value result = applyAssignment(node.text, arrayElement(base, index), value);
+                setArrayElement(base, index, result);
                 return {};
             }
             throw SourceError("INVALID_ASSIGNMENT", "Invalid assignment target",
