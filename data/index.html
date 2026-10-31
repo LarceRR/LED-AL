@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#101720">
+  <title>LED LAB</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --panel: #141b24;
+      --panel-2: #192330;
+      --panel-3: #202c3a;
+      --line: #2b3949;
+      --text: #e8edf2;
+      --muted: #8c9aaa;
+      --accent: #f2a900;
+      --green: #67d6a3;
+      --red: #ff7373;
+      --blue: #77b8ff;
+      --radius: 12px;
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--bg); }
+    button, input, select, textarea { font: inherit; }
+    button { color: inherit; }
+    .topbar { position: sticky; z-index: 4; top: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 62px; padding: 10px 20px; background: #101720; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 11px; font-size: 15px; font-weight: 800; letter-spacing: -.03em; }
+    .brand-mark { width: 30px; height: 30px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 5px; background: var(--accent); border-radius: 8px; }
+    .brand-mark i { background: #201a0b; border-radius: 2px; }
+    .brand small { display: block; color: var(--muted); font-size: 9px; font-weight: 650; letter-spacing: .13em; }
+    .device-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; text-align: right; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+    .dot.online { background: var(--green); box-shadow: 0 0 10px #67d6a377; }
+    main { width: min(1320px, 100%); margin: 0 auto; padding: 20px; }
+    h1 { margin: 0; font-size: clamp(22px, 4vw, 29px); letter-spacing: -.045em; }
+    h2 { margin: 0; color: #c7d1db; font-size: 12px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    .intro { display: flex; align-items: end; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+    .subhead { margin-top: 5px; color: var(--muted); font-size: 12px; }
+    .network-note { color: #bac6d2; font-size: 11px; text-align: right; }
+    .network-note strong { color: var(--accent); }
+    .grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .75fr); gap: 14px; align-items: start; }
+    .stack { display: grid; gap: 14px; min-width: 0; }
+    .panel { min-width: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+    .panel-body { padding: 14px; }
+    .toolbar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .btn, select { min-height: 35px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-3); padding: 7px 10px; font-size: 12px; }
+    .btn { cursor: pointer; }
+    .btn:hover { border-color: #687b8f; }
+    .btn:disabled { cursor: not-allowed; opacity: .45; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #1c1709; font-weight: 750; }
+    .btn.ghost { background: transparent; }
+    .btn.danger { color: #ffaaaa; }
+    .library-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+    #animationList { display: grid; gap: 5px; max-height: 240px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+    .animation-item { display: flex; gap: 6px; }
+    .animation-select { flex: 1; min-width: 0; overflow: hidden; border: 1px solid transparent; border-radius: 7px; background: transparent; padding: 9px 10px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .animation-select:hover { background: var(--panel-2); }
+    .animation-select.selected { border-color: #70520c; background: #2b2414; color: #ffd15a; }
+    .editor-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: #111923; color: var(--muted); font: 11px ui-monospace, Consolas, monospace; }
+    textarea { display: block; width: 100%; min-height: 390px; resize: vertical; border: 0; outline: 0; background: #0b1118; padding: 14px; color: #dce6f0; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 2; white-space: pre; }
+    .editor-actions { display: flex; gap: 7px; flex-wrap: wrap; padding: 10px 12px; border-top: 1px solid var(--line); }
+    .notice { margin: 0 0 14px; border: 1px solid #73530d; border-radius: 8px; background: #2b2414; padding: 10px 12px; color: #f1d997; font-size: 12px; }
+    .notice.error { border-color: #743e42; background: #2b191c; color: #ffb7b7; }
+    .notice[hidden] { display: none; }
+    .control { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #263342; }
+    .control:last-child { border-bottom: 0; }
+    .control label { color: #bdc9d5; font-size: 12px; }
+    .control output { color: var(--accent); font: 11px ui-monospace, monospace; }
+    .control input, .control select { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+    .control select { width: auto; }
+    .wifi-form { display: grid; gap: 10px; }
+    .wifi-field { display: grid; gap: 5px; color: #bdc9d5; font-size: 12px; }
+    .wifi-field input { width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); padding: 8px 10px; color: var(--text); }
+    .wifi-picker { display: grid; grid-template-columns: 1fr auto; gap: 7px; }
+    .wifi-picker select { min-width: 0; width: 100%; }
+    .wifi-help { margin: 0; color: var(--muted); font-size: 11px; }
+    .wifi-address { display: inline-block; margin: 2px 0 12px; color: var(--blue); font-size: 12px; }
+    .wifi-address[hidden] { display: none; }
+    .metric-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+    .metric { padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+    .metric span { display: block; color: var(--muted); font-size: 9px; letter-spacing: .09em; text-transform: uppercase; }
+    .metric strong { display: block; margin-top: 4px; font: 600 15px ui-monospace, monospace; }
+    .runtime-label { color: var(--muted); font-size: 11px; }
+    .runtime-label strong { color: var(--text); }
+    .output-placeholder { display: grid; min-height: 95px; place-content: center; gap: 5px; border: 1px dashed #3b4a5a; border-radius: 8px; color: var(--muted); text-align: center; font-size: 11px; }
+    .output-placeholder strong { color: #d6dee7; font-size: 12px; }
+    .console { max-height: 190px; min-height: 90px; overflow: auto; background: #0a1016; padding: 8px 10px; font: 10px/1.65 ui-monospace, monospace; }
+    .log { display: grid; grid-template-columns: 58px 56px 1fr; gap: 7px; color: #a5b2bf; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .log time { color: #657586; }
+    .log .ok { color: var(--green); }
+    .log .error { color: var(--red); }
+    .log .info { color: var(--blue); }
+    .footnote { margin: 12px 2px 0; color: var(--muted); font-size: 10px; }
+    .hidden { display: none !important; }
+    @media (max-width: 800px) {
+      main { padding: 14px; }
+      .grid { grid-template-columns: 1fr; }
+      .side { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+      .side .library-panel, .side .console-panel { grid-column: 1 / -1; }
+      textarea { min-height: 340px; }
+    }
+    @media (max-width: 520px) {
+      .topbar { padding: 9px 12px; }
+      main { padding: 12px; }
+      .intro { align-items: start; flex-direction: column; }
+      .network-note { text-align: left; }
+      .side { grid-template-columns: 1fr; }
+      .side .library-panel, .side .console-panel { grid-column: auto; }
+      textarea { min-height: 300px; font-size: 11px; }
+      .editor-actions .btn { flex: 1; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+      <span>LED LAB<small>ESP32 ANIMATION CONTROL</small></span>
+    </div>
+    <div class="device-state"><span id="connectionDot" class="dot"></span><span id="connectionText">Connecting…</span></div>
+  </header>
+  <main>
+    <div class="intro">
+      <div>
+        <h1>Animation Lab</h1>
+        <div class="subhead">Edit locally, compile on-device, keep animations running without your phone.</div>
+      </div>
+      <div class="network-note"><strong>Home Wi-Fi is optional.</strong><br>LED-LAB stays available at 192.168.4.1.</div>
+    </div>
+    <div id="storageNotice" class="notice error" hidden></div>
+    <div id="deviceNotice" class="notice" hidden></div>
+    <div class="grid">
+      <section class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Animation editor</h2>
+            <span id="saveState" class="runtime-label">Saved locally</span>
+          </div>
+          <div class="editor-meta"><span id="editorName">No animation selected</span><span>LED LAB DSL · v1</span></div>
+          <textarea id="sourceEditor" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Animation source code"></textarea>
+          <div class="editor-actions">
+            <button id="compileButton" class="btn primary" type="button" disabled>Compile &amp; Run</button>
+            <button id="stopButton" class="btn" type="button" disabled>Stop</button>
+            <button id="stepButton" class="btn" type="button" disabled>Step Frame</button>
+            <button id="resetButton" class="btn ghost" type="button" disabled>Restore saved</button>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2>Physical LED output</h2><span id="runningName" class="runtime-label">Idle</span></div>
+          <div class="panel-body">
+            <div class="output-placeholder">
+              <strong>Rendered by ESP32 · <span id="ledOutputInfo">—</span></strong>
+              <span>No pixel frames are streamed to this browser.</span>
+            </div>
+          </div>
+        </section>
+      </section>
+      <aside class="stack side">
+        <section class="panel library-panel">
+          <div class="panel-head"><h2>Local library</h2><button id="newButton" class="btn primary" type="button">＋ New</button></div>
+          <div class="panel-body">
+            <ul id="animationList" aria-label="Saved animations"></ul>
+            <div class="library-tools" style="margin-top:10px">
+              <button id="renameButton" class="btn" type="button">Rename</button>
+              <button id="duplicateButton" class="btn" type="button">Duplicate</button>
+              <button id="deleteButton" class="btn danger" type="button">Delete</button>
+            </div>
+            <div class="library-tools" style="margin-top:8px">
+              <button id="exportOneButton" class="btn ghost" type="button">Export animation</button>
+              <button id="exportLibraryButton" class="btn ghost" type="button">Export library</button>
+              <button id="importButton" class="btn ghost" type="button">Import</button>
+              <input id="importFile" class="hidden" type="file" accept=".json,.ledlab,application/json">
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2>Device controls</h2></div>
+          <div class="panel-body">
+            <div class="control"><label for="brightness">Brightness</label><output id="brightnessValue">20%</output><input id="brightness" type="range" min="0" max="100" step="1" value="20"></div>
+            <div class="control"><label for="currentLimit">Current budget</label><output id="currentLimitValue">2000 mA</output><input id="currentLimit" type="range" min="500" max="18000" step="100" value="2000"></div>
+            <div class="control"><label for="timeScale">Time scale</label><output id="timeScaleValue">1.0×</output><input id="timeScale" type="range" min="0.1" max="4" step="0.1" value="1"></div>
+            <div class="control"><label for="targetFps">Target frame rate</label><output></output><select id="targetFps"><option value="20">20 FPS</option><option value="30">30 FPS</option><option value="60" selected>60 FPS</option></select></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2>Home Wi-Fi</h2><span id="homeWifiBadge" class="runtime-label">Not configured</span></div>
+          <div class="panel-body">
+            <p id="homeWifiState" class="runtime-label" style="margin:0 0 6px">Checking connection…</p>
+            <a id="homeWifiAddress" class="wifi-address" hidden></a>
+            <p class="wifi-help" style="margin-bottom:12px">Setup access point: <strong>LED-LAB · 192.168.4.1</strong> (stays available as a fallback).</p>
+            <form id="homeWifiForm" class="wifi-form">
+              <div class="wifi-field">
+                <label for="homeWifiSsid">Detected router network (SSID)</label>
+                <div class="wifi-picker">
+                  <select id="homeWifiSsid" name="ssidHex" required>
+                    <option value="">Scan for networks first</option>
+                  </select>
+                  <button id="scanWifiButton" class="btn" type="button">Scan</button>
+                </div>
+              </div>
+              <button id="manualWifiButton" class="btn ghost" type="button">Enter a hidden network manually</button>
+              <label id="manualWifiField" class="wifi-field" for="manualWifiSsid" hidden>Hidden network name
+                <input id="manualWifiSsid" type="text" maxlength="32" autocomplete="username">
+              </label>
+              <label class="wifi-field" for="homeWifiPassword">Router password
+                <input id="homeWifiPassword" name="password" type="password" maxlength="63" autocomplete="new-password">
+              </label>
+              <p class="wifi-help">Choose a scanned network to preserve its exact SSID bytes, including non-ASCII names. Hidden networks can be entered manually. Password is stored on the ESP32 and never shown by the status API.</p>
+              <button id="saveWifiButton" class="btn primary" type="submit">Save and connect</button>
+            </form>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2>Runtime metrics</h2><span id="firmwareVersion" class="runtime-label">—</span></div>
+          <div class="panel-body">
+            <div class="metric-grid">
+              <div class="metric"><span>Actual FPS</span><strong id="metricFps">—</strong></div>
+              <div class="metric"><span>Frame</span><strong id="metricFrame">—</strong></div>
+              <div class="metric"><span>Compute</span><strong id="metricCompute">—</strong></div>
+              <div class="metric"><span>LED transfer</span><strong id="metricTransfer">—</strong></div>
+              <div class="metric"><span>Current estimate</span><strong id="metricCurrent">—</strong></div>
+              <div class="metric"><span>Power limiter</span><strong id="metricPower">—</strong></div>
+            </div>
+            <p class="runtime-label" style="margin:10px 0 0">Selected: <strong id="selectedName">—</strong><br>Running: <strong id="runningNameCopy">—</strong></p>
+          </div>
+        </section>
+        <section class="panel console-panel">
+          <div class="panel-head"><h2>Console</h2><button id="clearConsole" class="btn ghost" type="button">Clear</button></div>
+          <div id="console" class="console" role="log" aria-live="polite"></div>
+        </section>
+      </aside>
+    </div>
+    <p class="footnote">Animations stay in this browser’s local storage. Export a JSON backup to move them to another phone or browser.</p>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+    const STORAGE_KEY = 'ledlab.animations.v1';
+    const $ = id => document.getElementById(id);
+    const editor = $('sourceEditor');
+    let library = { schemaVersion: 1, animations: [], selectedAnimationId: null, settings: {} };
+    let selected = null;
+    let capabilities = null;
+    let corruptStorage = false;
+    let corruptRaw = '';
+    let deviceOnline = false;
+    let saveTimer = 0;
+    let settingsTimer = 0;
+    let pollTimer = 0;
+    let lastDeviceError = '';
+    let lastWifiDiagnostic = '';
+    let lastWifiConnected = false;
+    let homeWifiScanBusy = false;
+    const apiSettings = { brightness: 20, currentLimitMa: 2000, timeScale: 1, targetFps: 60 };
+
+    function makeSource(name, body, state = '', update = '') {
+      const quotedName = name.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, ' ');
+      return `animation "${quotedName}" {\n${state}${update}  render(i) {\n${body}\n  }\n}`;
+    }
+    const examples = [
+      ['Procedural Fire', makeSource('Procedural Fire',
+        '    let x = i / 299;\n    let heat = pow(max(0, noise(x * 13, time * 1.7) * 0.8 + sin(i * 0.16 - time * 3) * 0.2), 1.7);\n    return rgb(clamp(heat * 1.6, 0, 1), clamp((heat - 0.22) * 1.5, 0, 1), clamp((heat - 0.68) * 2.8, 0, 1));')],
+      ['Ocean Waves', makeSource('Ocean Waves',
+        '    let wave = sin(i * 0.045 - time * 1.4) * 0.5 + noise(i * 0.035, time * 0.45) * 0.5;\n    let foam = smoothstep(0.35, 0.8, wave);\n    return rgb(0.005 + foam * 0.08, 0.025 + foam * 0.25, 0.11 + foam * 0.5);')],
+      ['Aurora Flow', makeSource('Aurora Flow',
+        '    let x = i / 299;\n    let wave = sin(x * 10 - time * 0.45 + sin(x * 21 + time * 0.2));\n    let glow = smoothstep(-0.5, 0.9, wave + noise(x * 6, time * 0.15));\n    return hsv(fract(0.32 + x * 0.16 + sin(time * 0.08) * 0.05), 0.72, glow * 0.7);')],
+      ['Rainbow Flow', makeSource('Rainbow Flow',
+        '    return hsv(fract(i / 300 + time * 0.06), 0.9, 0.8);')],
+      ['Spark Field', makeSource('Spark Field',
+        '    return rgb(0.006, 0.008, 0.015 + pow(noise(i * 0.65, 14.2), 24) * 0.65);',
+        '  state sparks = array(300, 0);\n',
+        '  update(dt) {\n    for (let j = 0; j < 300; j += 1) {\n      sparks[j] = max(0, sparks[j] - dt * 1.2);\n      if (random() < dt * 0.08) sparks[j] = randomRange(0.4, 1);\n    }\n  }\n')],
+      ['Meteor Shower', makeSource('Meteor Shower',
+        '    let glow = 0;\n    for (let j = 0; j < 7; j += 1) {\n      let d = heads[j] - i;\n      if (d >= 0 && d < lengths[j]) glow += exp(-d * 0.12) * (1 - d / lengths[j]);\n    }\n    return rgb(clamp(glow, 0, 1), clamp(glow * 0.65, 0, 1), clamp(glow * 0.2 + 0.01, 0, 1));',
+        '  state heads = array(7, 0);\n  state lengths = array(7, 22);\n  state speeds = array(7, 90);\n',
+        '  update(dt) {\n    for (let j = 0; j < 7; j += 1) {\n      heads[j] += speeds[j] * dt;\n      if (heads[j] > 330) { heads[j] = -randomRange(0, 45); lengths[j] = randomRange(18, 46); speeds[j] = randomRange(75, 125); }\n    }\n  }\n')],
+      ['The Last Lighthouse', makeSource('The Last Lighthouse',
+        '    let water = 0.04 + max(0, sin(i * 0.06 - time * 1.2)) * 0.1;\n    let beam = exp(-abs(i - 282) * 0.08) * (0.5 + 0.5 * sin(time * 0.6));\n    let ship = exp(-abs(i - fract(time / 24) * 340 + 24) * 0.7);\n    return rgb(water * 0.15 + beam * 0.3 + ship * 0.8, water * 0.5 + beam * 0.2 + ship * 0.4, water + beam * 0.05);',
+        '  state shipX = -24;\n  state stormFlash = 0;\n',
+        '  update(dt) {\n    shipX += dt * 13;\n    if (shipX > 274) shipX = -24;\n    stormFlash = max(0, stormFlash - dt * 2.7);\n    if (random() < dt * 0.1) stormFlash = randomRange(0.5, 1);\n  }\n')],
+      ['Heartbeat', makeSource('Heartbeat',
+        '    let phase = fract(time / 1.15);\n    let beat = exp(-pow((phase - 0.14) * 20, 2)) + exp(-pow((phase - 0.3) * 14, 2)) * 0.6;\n    let pulse = clamp(beat, 0, 1);\n    return rgb(pulse * (0.2 + 0.75 * exp(-abs(i - 149) * 0.035)), pulse * 0.01, pulse * 0.025);')],
+      ['Event Horizon', makeSource('Event Horizon',
+        '    let d = abs(i - 149.5) / 150;\n    let ring = exp(-pow((d - fract(time * 0.08) * 0.9) * 28, 2));\n    let core = exp(-d * 12);\n    return rgb(clamp(core * 0.3 + ring, 0, 1), clamp(ring * 0.25, 0, 1), clamp(core * 0.8 + ring * 0.65, 0, 1));')],
+      ['Reactor Core', makeSource('Reactor Core',
+        '    let pulse = 0.55 + 0.45 * sin(time * 4 + sin(time * 0.7));\n    let core = exp(-abs(i - 149.5) * 0.045) * pulse;\n    let rings = pow(max(0, sin(abs(i - 149.5) * 0.16 - time * 3)), 5);\n    return rgb(clamp(core * 0.5 + rings * 0.3, 0, 1), clamp(core * 0.9 + rings * 0.55, 0, 1), clamp(core * 0.25 + rings * 0.08, 0, 1));')],
+      ['Liquid Mercury', makeSource('Liquid Mercury',
+        '    let wave = sin(i * 0.045 + time) + sin(i * 0.09 - time * 0.7) * 0.5;\n    let shine = pow(max(0, cos(wave * 2)), 8);\n    let level = clamp(0.12 + shine * 0.85 + noise(i * 0.08, time * 0.5) * 0.16, 0, 1);\n    return rgb(level * 0.72, level * 0.82, level);')],
+      ['Plasma Discharge', makeSource('Plasma Discharge',
+        '    let x = i / 299;\n    let a = sin(x * 17 + time * 2 + sin(x * 31 - time));\n    let b = cos(x * 11 - time * 1.5 + sin(time * 0.4));\n    let p = clamp(0.25 + (a + b) * 0.25 + noise(x * 7, time * 0.35) * 0.25, 0, 1);\n    return hsv(fract(0.72 + p * 0.2), 0.9, p);')],
+      ['Bioluminescence', makeSource('Bioluminescence',
+        '    let glow = pow(noise(i * 0.12, time * 0.22), 5) * (0.5 + 0.5 * sin(time + i * 0.02));\n    return rgb(glow * 0.02, glow * 0.45, glow * 0.5);')],
+      ['Solar Eclipse', makeSource('Solar Eclipse',
+        '    let phase = fract(time / 24);\n    let eclipse = exp(-pow((i / 299 - phase) * 5, 2));\n    let corona = exp(-abs(i - 149.5) * 0.045) * (1 - eclipse * 0.8);\n    return rgb(clamp(corona, 0, 1), clamp(corona * 0.45 + eclipse * 0.1, 0, 1), clamp(eclipse * 0.15, 0, 1));')],
+      ['Deep Signal', makeSource('Deep Signal',
+        '    let carrier = sin(i * 0.18 - time * 3);\n    let envelope = pow(max(0, sin(i * 0.012 - time * 0.45)), 6);\n    let signal = abs(carrier) * envelope;\n    return rgb(signal * 0.08, signal * 0.55, signal * 0.95);')],
+      ['Dream State', makeSource('Dream State',
+        '    let x = i / 299;\n    let cloud = sin(x * 5 + time * 0.1 + sin(x * 13 - time * 0.08));\n    let glow = smoothstep(-0.65, 0.8, cloud + noise(x * 3, time * 0.04) * 0.6);\n    return hsv(fract(0.58 + glow * 0.25 + sin(time * 0.03) * 0.04), 0.55, glow * 0.6);')],
+      ['Starforge', makeSource('Starforge',
+        '    let center = 132 + noise(floor(time / 18) * 17.13, seed * 73 + 5.1) * 36;\n    let phase = fract(time / cycle) * cycle;\n    let shell = exp(-pow((abs(i - center) - phase * 7) / 4, 2));\n    let core = exp(-abs(i - center) * 0.12) * smoothstep(8, 9, phase) * (1 - smoothstep(9, 10, phase));\n    let stars = pow(noise(i * 0.41 + seed * 31, seed * 100), 18) * 0.25;\n    return rgb(clamp(stars * 0.4 + shell * 0.9 + core, 0, 1), clamp(stars * 0.6 + shell * 0.5 + core * 0.8, 0, 1), clamp(stars + shell * 0.2 + core * 0.7, 0, 1));',
+        '  state seed = random();\n  state cycle = randomRange(16, 21);\n')]
+    ];
+
+    function log(kind, tag, message) {
+      const row = document.createElement('div');
+      row.className = 'log';
+      const stamp = document.createElement('time');
+      stamp.textContent = new Date().toLocaleTimeString();
+      const label = document.createElement('span');
+      label.className = kind;
+      label.textContent = tag;
+      const text = document.createElement('span');
+      text.textContent = message;
+      row.append(stamp, label, text);
+      $('console').appendChild(row);
+      $('console').scrollTop = $('console').scrollHeight;
+    }
+
+    function id() {
+      return window.crypto && crypto.randomUUID ? crypto.randomUUID() :
+        `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    }
+    function sampleAnimations() {
+      const now = Date.now();
+      return examples.map(([name, source], index) => ({
+        id: `sample-${index + 1}`,
+        name,
+        source,
+        createdAt: now,
+        updatedAt: now
+      }));
+    }
+    function validAnimation(item) {
+      return item && typeof item.id === 'string' && typeof item.name === 'string' &&
+        item.name.trim().length > 0 && item.name.length <= 64 &&
+        typeof item.source === 'string' && item.source.length <= 16384;
+    }
+    async function readLibrary() {
+      let raw;
+      try { raw = localStorage.getItem(STORAGE_KEY); }
+      catch (error) {
+        corruptStorage = true;
+        $('storageNotice').hidden = false;
+        $('storageNotice').textContent = `Browser storage is unavailable: ${error.message}. Editing is temporary until storage works.`;
+        return;
+      }
+      if (raw === null) {
+        try {
+          const response = await fetch('/examples.json', { cache: 'no-store' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const seed = await response.json();
+          if (seed?.schemaVersion !== 1 || !Array.isArray(seed.animations) ||
+              seed.animations.length !== 17 || seed.animations.some(item => !validAnimation(item))) {
+            throw new Error('Embedded example library is invalid');
+          }
+          library.animations = seed.animations;
+        } catch (error) {
+          log('error', 'SAMPLES', `Could not load bundled Previewer samples: ${error.message}`);
+          library.animations = sampleAnimations();
+        }
+        library.selectedAnimationId = library.animations.find(item => item.name === 'The Last Lighthouse')?.id ||
+          library.animations[0]?.id || null;
+        persist();
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || parsed.schemaVersion !== 1 || !Array.isArray(parsed.animations) ||
+            parsed.animations.some(item => !validAnimation(item))) throw new Error('Unsupported or invalid library data');
+        library = {
+          schemaVersion: 1,
+          animations: parsed.animations,
+          selectedAnimationId: parsed.selectedAnimationId || null,
+          settings: parsed.settings && typeof parsed.settings === 'object' ? parsed.settings : {}
+        };
+        if (!library.animations.some(item => item.id === library.selectedAnimationId)) {
+          library.selectedAnimationId = library.animations[0]?.id || null;
+        }
+      } catch (error) {
+        corruptStorage = true;
+        corruptRaw = raw;
+        library.animations = sampleAnimations();
+        library.selectedAnimationId = library.animations[0]?.id || null;
+        $('storageNotice').hidden = false;
+        $('storageNotice').replaceChildren(
+          document.createTextNode(`Saved library data could not be read (${error.message}). Existing data has not been overwritten. `));
+        const backup = document.createElement('button');
+        backup.className = 'btn';
+        backup.textContent = 'Download damaged data';
+        backup.addEventListener('click', () => download('ledlab-storage-backup.txt', corruptRaw, 'text/plain'));
+        const reset = document.createElement('button');
+        reset.className = 'btn danger';
+        reset.textContent = 'Start with sample library';
+        reset.addEventListener('click', () => {
+          if (!confirm('Replace the unreadable local data? Download a backup first if you may need it.')) return;
+          corruptStorage = false;
+          persist();
+          $('storageNotice').hidden = true;
+          log('info', 'STORAGE', 'Started a new sample library after confirmation');
+        });
+        $('storageNotice').append(' ', backup, ' ', reset);
+      }
+    }
+    function persist() {
+      if (corruptStorage) return false;
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(library));
+        return true;
+      } catch (error) {
+        $('storageNotice').hidden = false;
+        $('storageNotice').textContent = `Could not save to browser storage: ${error.message}. Export a backup before leaving this page.`;
+        log('error', 'STORAGE', error.message);
+        return false;
+      }
+    }
+    function current() {
+      return library.animations.find(item => item.id === selected) || null;
+    }
+    function saveEditor() {
+      const animation = current();
+      if (!animation) return;
+      animation.source = editor.value;
+      animation.updatedAt = Date.now();
+      library.selectedAnimationId = animation.id;
+      const saved = persist();
+      $('saveState').textContent = saved ? 'Saved locally' : 'Not saved';
+      renderLibrary();
+    }
+    function scheduleSave() {
+      $('saveState').textContent = 'Saving…';
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveEditor, 350);
+    }
+    function renderLibrary() {
+      const list = $('animationList');
+      list.replaceChildren();
+      for (const animation of library.animations) {
+        const item = document.createElement('li');
+        item.className = 'animation-item';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `animation-select${animation.id === selected ? ' selected' : ''}`;
+        button.textContent = animation.name;
+        button.title = animation.name;
+        button.addEventListener('click', () => selectAnimation(animation.id));
+        item.appendChild(button);
+        list.appendChild(item);
+      }
+      const hasSelection = Boolean(current());
+      for (const name of ['renameButton', 'duplicateButton', 'deleteButton', 'exportOneButton', 'resetButton']) {
+        $(name).disabled = !hasSelection;
+      }
+      $('editorName').textContent = current()?.name || 'No animation selected';
+      $('selectedName').textContent = current()?.name || '—';
+      $('compileButton').disabled = !deviceOnline || !hasSelection;
+      $('stepButton').disabled = !deviceOnline;
+      $('stopButton').disabled = !deviceOnline;
+      $('resetButton').disabled = !hasSelection;
+    }
+    function selectAnimation(animationId) {
+      clearTimeout(saveTimer);
+      saveEditor();
+      selected = animationId;
+      library.selectedAnimationId = animationId;
+      const animation = current();
+      editor.value = animation ? animation.source : '';
+      $('saveState').textContent = 'Saved locally';
+      persist();
+      renderLibrary();
+    }
+    function download(filename, text, mime = 'application/json') {
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(new Blob([text], { type: mime }));
+      link.download = filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    }
+    function exportSelected() {
+      clearTimeout(saveTimer);
+      saveEditor();
+      const animation = current();
+      if (!animation) return;
+      download(`${animation.name.replace(/[^a-z0-9_-]+/gi, '-')}.json`,
+        JSON.stringify({ schemaVersion: 1, animation }, null, 2));
+    }
+    function importData(text) {
+      let data;
+      try { data = JSON.parse(text); }
+      catch { throw new Error('File is not valid JSON'); }
+      if (data?.schemaVersion === 1 && Array.isArray(data.animations)) {
+        const incoming = data.animations;
+        if (!incoming.length || incoming.some(item => !validAnimation(item))) throw new Error('Library contains invalid animations');
+        const known = new Set(library.animations.map(item => item.id));
+        for (const item of incoming) {
+          const copy = { ...item };
+          if (known.has(copy.id)) copy.id = id();
+          known.add(copy.id);
+          library.animations.push(copy);
+        }
+      } else {
+        const animation = data?.animation || data;
+        if (!validAnimation(animation)) throw new Error('File does not contain a valid animation');
+        library.animations.push({ ...animation, id: id(), createdAt: Date.now(), updatedAt: Date.now() });
+      }
+      selected = library.animations[library.animations.length - 1].id;
+      library.selectedAnimationId = selected;
+      editor.value = current().source;
+      if (!persist()) throw new Error('Imported animation could not be saved to local storage');
+      renderLibrary();
+      log('ok', 'IMPORT', `Imported ${current().name}`);
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+        signal: AbortSignal.timeout ? AbortSignal.timeout(3500) : undefined
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(payload.error?.message || `HTTP ${response.status}`);
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    }
+    function setOnline(online) {
+      deviceOnline = online;
+      $('connectionDot').classList.toggle('online', online);
+      $('connectionText').textContent = online ? 'Device connected' : 'Device offline';
+      $('deviceNotice').hidden = online;
+      if (!online) {
+        $('deviceNotice').textContent = 'ESP32 is not reachable at this address. Keep your animation edits; reconnect and retry when the device is available.';
+      }
+      renderLibrary();
+    }
+    function setText(idValue, value) { $(idValue).textContent = value; }
+    function syncDevice(status) {
+      setOnline(true);
+      const runtime = status.runtime || {};
+      const led = status.led || {};
+      const homeWifi = status.wifi?.home || {};
+      if (!homeWifi.configured) {
+        setText('homeWifiBadge', 'Not configured');
+        setText('homeWifiState', 'Enter your home router details to connect.');
+      } else if (homeWifi.connected) {
+        setText('homeWifiBadge', 'Connected');
+        setText('homeWifiState', `Connected to ${homeWifi.ssid || 'home Wi-Fi'}.`);
+      } else {
+        const badges = {
+          connecting: 'Connecting',
+          'network-not-found': 'Not found',
+          'connection-failed': 'Check password',
+          'connection-lost': 'Reconnecting',
+          disconnected: 'Disconnected'
+        };
+        setText('homeWifiBadge', badges[homeWifi.status] || 'Connecting');
+        const states = {
+          connecting: 'Connecting to the saved network…',
+          'network-not-found': 'Router network was not found. Check the SSID.',
+          'connection-failed': 'Could not connect. Check the router password.',
+          'connection-lost': 'Connection lost. Reconnecting…',
+          disconnected: 'Not connected. Check the router details and try again.'
+        };
+        const reasonDescriptions = {
+          2: 'authentication expired; this does not by itself prove the password is wrong',
+          3: 'the access point ended authentication while the station was leaving or retrying',
+          1: 'unspecified disconnect reason',
+          15: '4-way handshake timeout (often a wrong password or security mismatch)',
+          201: 'the access point was not found',
+          202: 'authentication failed (check the password)',
+          203: 'association failed',
+          210: 'no access point with compatible security was found',
+          211: 'access point security was rejected'
+        };
+        const reason = Number(homeWifi.disconnectReason || 0);
+        const disconnectRssi = Number(homeWifi.disconnectRssi || 0);
+        const detail = reason
+          ? ` Reason ${reason} ${homeWifi.disconnectReasonName || ''}: ${reasonDescriptions[reason] || 'see ESP32 Wi-Fi diagnostics'}.${disconnectRssi ? ` Signal at disconnect: ${disconnectRssi} dBm.` : ''}`
+          : '';
+        setText('homeWifiState', `${states[homeWifi.status] || 'Connecting to the saved network…'}${detail}`);
+      }
+      const wifiDiagnostic = `${homeWifi.status || ''}:${homeWifi.disconnectReason || 0}`;
+      if (homeWifi.configured && homeWifi.status === 'disconnected' &&
+          wifiDiagnostic !== lastWifiDiagnostic) {
+        lastWifiDiagnostic = wifiDiagnostic;
+        log('error', 'WIFI', `${homeWifi.disconnectReasonName || 'Connection failed'} (reason ${homeWifi.disconnectReason || 0})`);
+      } else if (homeWifi.connected) {
+        lastWifiDiagnostic = '';
+        if (!lastWifiConnected) {
+          log('ok', 'WIFI', `Connected to ${homeWifi.ssid || 'home Wi-Fi'} at ${homeWifi.ip}`);
+        }
+      } else if (!homeWifi.configured) {
+        lastWifiDiagnostic = '';
+      }
+      lastWifiConnected = Boolean(homeWifi.connected);
+      if (homeWifi.ssidHex) $('homeWifiSsid').dataset.savedSsidHex = homeWifi.ssidHex;
+      const address = $('homeWifiAddress');
+      if (homeWifi.connected && homeWifi.ip && homeWifi.ip !== '0.0.0.0') {
+        address.href = `http://${homeWifi.ip}/`;
+        address.textContent = `Open LED LAB on your home network: http://${homeWifi.ip}`;
+        address.hidden = false;
+      } else {
+        address.removeAttribute('href');
+        address.textContent = '';
+        address.hidden = true;
+      }
+      setText('runningName', runtime.running ? `Running · ${runtime.animationName || 'Animation'}` : 'Idle');
+      setText('runningNameCopy', runtime.running ? runtime.animationName || 'Animation' : 'Idle');
+      setText('metricFps', Number(runtime.fps || 0).toFixed(1));
+      setText('metricFrame', Number(runtime.frame || 0).toLocaleString());
+      setText('metricCompute', `${Number(runtime.computeTimeMs || 0).toFixed(2)} ms`);
+      setText('metricTransfer', `${Number(runtime.transferTimeMs || 0).toFixed(2)} ms`);
+      setText('metricCurrent', `${Number(led.estimatedCurrentMa || 0)} / ${Number(led.currentLimitMa || 0)} mA`);
+      setText('metricPower', led.powerLimited ? 'Limited' : 'Normal');
+      if (runtime.lastError) {
+        const error = runtime.lastError;
+        const key = `${error.code}:${error.message}:${error.line || 0}`;
+        if (key !== lastDeviceError) {
+          lastDeviceError = key;
+          log('error', error.code || 'RUNTIME', `${error.message || 'Runtime error'}${error.line ? ` at ${error.line}:${error.column || 0}` : ''}`);
+        }
+      } else {
+        lastDeviceError = '';
+      }
+      if (status.settings) applySettings(status.settings, false);
+      else if (led.brightness !== undefined) setControlValues({
+        ...apiSettings,
+        brightness: led.brightness,
+        currentLimitMa: led.currentLimitMa || apiSettings.currentLimitMa,
+        targetFps: runtime.targetFps || apiSettings.targetFps,
+        timeScale: runtime.timeScale || apiSettings.timeScale
+      });
+    }
+    function setControlValues(settings) {
+      apiSettings.brightness = Number(settings.brightness);
+      apiSettings.currentLimitMa = Number(settings.currentLimitMa);
+      apiSettings.timeScale = Number(settings.timeScale);
+      apiSettings.targetFps = Number(settings.targetFps);
+      $('brightness').value = apiSettings.brightness;
+      $('brightnessValue').textContent = `${apiSettings.brightness}%`;
+      $('currentLimit').value = apiSettings.currentLimitMa;
+      $('currentLimitValue').textContent = `${apiSettings.currentLimitMa} mA`;
+      $('timeScale').value = apiSettings.timeScale;
+      $('timeScaleValue').textContent = `${apiSettings.timeScale.toFixed(1)}×`;
+      $('targetFps').value = apiSettings.targetFps;
+    }
+    function applySettings(settings, store = true) {
+      setControlValues(settings);
+      if (store) {
+        library.settings = { ...apiSettings };
+        persist();
+      }
+    }
+    async function refreshDevice() {
+      try {
+        const [status, caps] = await Promise.all([
+          api('/api/v1/status'),
+          capabilities ? Promise.resolve(capabilities) : api('/api/v1/capabilities')
+        ]);
+        capabilities = caps;
+        syncDevice(status);
+        setText('firmwareVersion', `FW ${caps.firmwareVersion || '—'}`);
+        setText('ledOutputInfo', `${caps.ledCount} ${caps.ledType} pixels`);
+        $('currentLimit').min = caps.settings?.currentLimitMinMa || 500;
+        $('currentLimit').max = caps.settings?.currentLimitMaxMa || 18000;
+        $('timeScale').min = caps.settings?.timeScaleMin || 0.1;
+        $('timeScale').max = caps.settings?.timeScaleMax || 4;
+        if (Array.isArray(caps.supportedOutputRates)) {
+          const rates = $('targetFps');
+          rates.replaceChildren();
+          for (const rate of caps.supportedOutputRates) {
+            const option = document.createElement('option');
+            option.value = rate;
+            option.textContent = `${rate} FPS`;
+            rates.appendChild(option);
+          }
+        }
+      } catch (error) {
+        setOnline(false);
+        if (!pollTimer) log('error', 'DEVICE', error.message);
+      }
+    }
+    async function sendSettings() {
+      if (!deviceOnline) return;
+      try {
+        const response = await api('/api/v1/settings', {
+          method: 'POST',
+          body: JSON.stringify(apiSettings)
+        });
+        applySettings(response.settings, true);
+        log('ok', 'SETTINGS', 'Device settings updated');
+      } catch (error) {
+        log('error', 'SETTINGS', error.message);
+        setOnline(false);
+      }
+    }
+    function scheduleSettings() {
+      apiSettings.brightness = Number($('brightness').value);
+      apiSettings.currentLimitMa = Number($('currentLimit').value);
+      apiSettings.timeScale = Number($('timeScale').value);
+      apiSettings.targetFps = Number($('targetFps').value);
+      $('brightnessValue').textContent = `${apiSettings.brightness}%`;
+      $('currentLimitValue').textContent = `${apiSettings.currentLimitMa} mA`;
+      $('timeScaleValue').textContent = `${apiSettings.timeScale.toFixed(1)}×`;
+      library.settings = { ...apiSettings };
+      persist();
+      clearTimeout(settingsTimer);
+      settingsTimer = setTimeout(sendSettings, 250);
+    }
+    async function compileRun() {
+      clearTimeout(saveTimer);
+      saveEditor();
+      const animation = current();
+      if (!animation || !deviceOnline) return;
+      try {
+        const queued = await api('/api/v1/animation/compile-run', {
+          method: 'POST',
+          body: JSON.stringify({ name: animation.name, source: animation.source })
+        });
+        log('info', 'COMPILE', `Compilation job ${queued.jobId} queued`);
+        $('compileButton').disabled = true;
+        let job;
+        do {
+          await new Promise(resolve => setTimeout(resolve, 350));
+          job = await api(`/api/v1/jobs/${queued.jobId}`);
+        } while (job.status === 'queued');
+        if (job.status === 'succeeded') {
+          log('ok', 'COMPILE', `${job.animationName || animation.name} is running on the ESP32`);
+          await refreshDevice();
+        } else {
+          const error = job.error || {};
+          log('error', error.code || 'COMPILE', `${error.message || 'Compilation failed'}${error.line ? ` at ${error.line}:${error.column || 0}` : ''}`);
+        }
+      } catch (error) {
+        log('error', 'COMPILE', error.message);
+        setOnline(false);
+      } finally {
+        $('compileButton').disabled = !deviceOnline || !current();
+      }
+    }
+    async function stopAnimation() {
+      try {
+        await api('/api/v1/animation/stop', { method: 'POST', body: JSON.stringify({ clear: false }) });
+        log('info', 'RUNTIME', 'Animation stopped; last LED frame retained');
+        await refreshDevice();
+      } catch (error) { log('error', 'STOP', error.message); }
+    }
+    async function stepFrame() {
+      try {
+        await api('/api/v1/animation/step', { method: 'POST', body: '{}' });
+        log('info', 'STEP', 'Single frame queued');
+      } catch (error) { log('error', 'STEP', error.message); }
+    }
+    async function scanHomeWifi() {
+      if (homeWifiScanBusy) return;
+      homeWifiScanBusy = true;
+      const button = $('scanWifiButton');
+      button.disabled = true;
+      button.textContent = 'Scanning…';
+      try {
+        await api('/api/v1/wifi/scan', { method: 'POST', body: '{}' });
+        let result;
+        do {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          result = await api('/api/v1/wifi/scan');
+        } while (result.status === 'scanning');
+        if (result.status !== 'complete') throw new Error('ESP32 did not complete the Wi-Fi scan');
+
+        const select = $('homeWifiSsid');
+        const previous = select.value;
+        select.replaceChildren(new Option('Select a detected network', ''));
+        const authModes = {
+          0: 'Open',
+          1: 'WEP',
+          2: 'WPA',
+          3: 'WPA2',
+          4: 'WPA/WPA2',
+          5: 'WPA2-Enterprise',
+          6: 'WPA3',
+          7: 'WPA2/WPA3',
+          8: 'WAPI',
+          9: 'OWE',
+          10: 'WPA3-Enterprise'
+        };
+        for (const network of result.networks || []) {
+          const security = authModes[network.authMode] || (network.secure ? 'secured' : 'open');
+          const label = `${network.ssid} · ${network.rssi} dBm · ch ${network.channel} · ${security}`;
+          select.add(new Option(label, network.ssidHex));
+        }
+        const preferred = [previous, select.dataset.savedSsidHex].find(value =>
+          value && [...select.options].some(option => option.value === value));
+        if (preferred) select.value = preferred;
+        log('ok', 'WIFI', `Scan complete: ${result.networks?.length || 0} network(s) found`);
+        if (!result.networks?.length) log('error', 'WIFI', 'No visible networks found; use manual entry for a hidden SSID');
+      } catch (error) {
+        log('error', 'WIFI', `Network scan failed: ${error.message}`);
+      } finally {
+        homeWifiScanBusy = false;
+        button.disabled = false;
+        button.textContent = 'Scan';
+      }
+    }
+    $('homeWifiForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = $('saveWifiButton');
+      button.disabled = true;
+      try {
+        const manual = !$('manualWifiField').hidden;
+        const selectedSsid = $('homeWifiSsid').value;
+        if (manual && !$('manualWifiSsid').value.trim()) {
+          throw new Error('Enter the hidden network name');
+        }
+        if (!manual && !selectedSsid) {
+          throw new Error('Scan and select your router network first');
+        }
+        const credentials = manual
+          ? { ssid: $('manualWifiSsid').value.trim(), password: $('homeWifiPassword').value }
+          : { ssidHex: selectedSsid, password: $('homeWifiPassword').value };
+        const response = await api('/api/v1/wifi', {
+          method: 'POST',
+          body: JSON.stringify(credentials)
+        });
+        $('homeWifiPassword').value = '';
+        $('homeWifiSsid').dataset.savedSsidHex = manual ? '' : selectedSsid;
+        setText('homeWifiState', `Saved ${response.ssid}. Connecting…`);
+        log('ok', 'WIFI', `Credentials saved for ${response.ssid}; connection started`);
+        await refreshDevice();
+      } catch (error) {
+        log('error', 'WIFI', error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    $('scanWifiButton').addEventListener('click', scanHomeWifi);
+    $('manualWifiButton').addEventListener('click', () => {
+      const manualField = $('manualWifiField');
+      manualField.hidden = !manualField.hidden;
+      $('homeWifiSsid').required = manualField.hidden;
+      $('manualWifiSsid').required = !manualField.hidden;
+      $('manualWifiButton').textContent = manualField.hidden
+        ? 'Enter a hidden network manually'
+        : 'Choose a detected network instead';
+    });
+
+    $('newButton').addEventListener('click', () => {
+      const name = prompt('Animation name', 'New animation');
+      if (!name || !name.trim()) return;
+      if (name.trim().length > 64) {
+        log('error', 'LIBRARY', 'Animation names must be 64 characters or fewer');
+        return;
+      }
+      clearTimeout(saveTimer);
+      saveEditor();
+      const animation = {
+        id: id(), name: name.trim(), source: makeSource(name.trim(), '    return rgb(0.1, 0.2, 0.6);'),
+        createdAt: Date.now(), updatedAt: Date.now()
+      };
+      library.animations.push(animation);
+      selected = animation.id;
+      library.selectedAnimationId = selected;
+      editor.value = animation.source;
+      persist();
+      renderLibrary();
+      log('ok', 'LIBRARY', `Created ${animation.name}`);
+    });
+    $('renameButton').addEventListener('click', () => {
+      const animation = current();
+      if (!animation) return;
+      const name = prompt('Rename animation', animation.name);
+      if (!name || !name.trim()) return;
+      if (name.trim().length > 64) {
+        log('error', 'LIBRARY', 'Animation names must be 64 characters or fewer');
+        return;
+      }
+      clearTimeout(saveTimer);
+      saveEditor();
+      animation.name = name.trim();
+      animation.updatedAt = Date.now();
+      persist();
+      renderLibrary();
+    });
+    $('duplicateButton').addEventListener('click', () => {
+      const animation = current();
+      if (!animation) return;
+      clearTimeout(saveTimer);
+      saveEditor();
+      const copy = { ...animation, id: id(), name: `${animation.name} Copy`, createdAt: Date.now(), updatedAt: Date.now() };
+      library.animations.push(copy);
+      selected = copy.id;
+      library.selectedAnimationId = selected;
+      editor.value = copy.source;
+      persist();
+      renderLibrary();
+    });
+    $('deleteButton').addEventListener('click', () => {
+      const animation = current();
+      if (!animation || !confirm(`Delete "${animation.name}"?`)) return;
+      library.animations = library.animations.filter(item => item.id !== animation.id);
+      selected = library.animations[0]?.id || null;
+      library.selectedAnimationId = selected;
+      editor.value = current()?.source || '';
+      persist();
+      renderLibrary();
+      log('info', 'LIBRARY', `Deleted ${animation.name}`);
+    });
+    $('exportOneButton').addEventListener('click', exportSelected);
+    $('exportLibraryButton').addEventListener('click', () => {
+      clearTimeout(saveTimer);
+      saveEditor();
+      download('ledlab-library.json', JSON.stringify(library, null, 2));
+    });
+    $('importButton').addEventListener('click', () => $('importFile').click());
+    $('importFile').addEventListener('change', async event => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      clearTimeout(saveTimer);
+      saveEditor();
+      try { importData(await file.text()); }
+      catch (error) { log('error', 'IMPORT', error.message); }
+      event.target.value = '';
+    });
+    $('compileButton').addEventListener('click', compileRun);
+    $('stopButton').addEventListener('click', stopAnimation);
+    $('stepButton').addEventListener('click', stepFrame);
+    $('resetButton').addEventListener('click', () => {
+      const animation = current();
+      if (animation && confirm('Discard unsaved editor changes and restore the saved source?')) editor.value = animation.source;
+    });
+    $('clearConsole').addEventListener('click', () => $('console').replaceChildren());
+    editor.addEventListener('input', scheduleSave);
+    for (const idValue of ['brightness', 'currentLimit', 'timeScale', 'targetFps']) {
+      $(idValue).addEventListener('input', scheduleSettings);
+      $(idValue).addEventListener('change', scheduleSettings);
+    }
+    window.addEventListener('beforeunload', () => {
+      clearTimeout(saveTimer);
+      saveEditor();
+    });
+
+    async function initialize() {
+      await readLibrary();
+      selected = library.selectedAnimationId;
+      editor.value = current()?.source || '';
+      renderLibrary();
+      const savedSettings = library.settings;
+      if (savedSettings && Object.keys(savedSettings).length) setControlValues({ ...apiSettings, ...savedSettings });
+      log('info', 'BOOT', 'LED LAB interface ready; animation library is browser-local');
+      log('info', 'NETWORK', 'No internet connection is required');
+      refreshDevice();
+      pollTimer = setInterval(refreshDevice, 2500);
+    }
+    initialize().catch(error => {
+      log('error', 'BOOT', `Could not initialize LED LAB: ${error.message}`);
+      setOnline(false);
+    });
+  })();
+  </script>
+</body>
+</html>
