@@ -1205,6 +1205,14 @@ void AnimationRuntime::serviceCompile() {
     if (!job_.pending) return;
     job_.pending = false;
     const uint32_t compileStarted = micros();
+    const size_t sourceBytes = pendingSource_.size();
+    Serial.printf(
+        "{\"level\":\"info\",\"component\":\"runtime\",\"event\":\"compile_started\",\"jobId\":%lu,\"sourceBytes\":%u,\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+        static_cast<unsigned long>(job_.id),
+        static_cast<unsigned>(sourceBytes),
+        static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+        static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+    Serial.flush();
     try {
         auto candidate = std::make_unique<Program>();
         std::vector<Token> tokens = Lexer(pendingSource_).tokenize();
@@ -1253,10 +1261,26 @@ void AnimationRuntime::serviceCompile() {
         job_.complete = true;
         job_.success = true;
         job_.name = active_->name;
+        Serial.printf(
+            "{\"level\":\"info\",\"component\":\"runtime\",\"event\":\"compile_succeeded\",\"jobId\":%lu,\"sourceBytes\":%u,\"compile_us\":%lu,\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+            static_cast<unsigned long>(job_.id),
+            static_cast<unsigned>(sourceBytes),
+            static_cast<unsigned long>(micros() - compileStarted),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+        Serial.flush();
     } catch (const SourceError& error) {
         job_.complete = true;
         job_.success = false;
         job_.error = convertError(error);
+        Serial.printf(
+            "{\"level\":\"error\",\"component\":\"runtime\",\"event\":\"compile_failed\",\"jobId\":%lu,\"code\":\"%s\",\"line\":%u,\"column\":%u,\"sourceBytes\":%u,\"compile_us\":%lu,\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+            static_cast<unsigned long>(job_.id), error.code.c_str(),
+            error.line, error.column, static_cast<unsigned>(sourceBytes),
+            static_cast<unsigned long>(micros() - compileStarted),
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+        Serial.flush();
     } catch (const std::bad_alloc&) {
         job_.complete = true;
         job_.success = false;
@@ -1268,6 +1292,12 @@ void AnimationRuntime::serviceCompile() {
                 std::to_string(freeHeap) + " B, largest block " +
                 std::to_string(largestBlock) + " B)",
             0, 0};
+        Serial.printf(
+            "{\"level\":\"error\",\"component\":\"runtime\",\"event\":\"compile_failed\",\"jobId\":%lu,\"code\":\"OUT_OF_MEMORY\",\"sourceBytes\":%u,\"compile_us\":%lu,\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+            static_cast<unsigned long>(job_.id), static_cast<unsigned>(sourceBytes),
+            static_cast<unsigned long>(micros() - compileStarted),
+            static_cast<unsigned>(freeHeap), static_cast<unsigned>(largestBlock));
+        Serial.flush();
     }
     pendingSource_.clear();
     pendingName_.clear();
