@@ -855,7 +855,14 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
         const float floorY = std::floor(y);
         const auto toUint32 = [](float value) {
             if (!std::isfinite(value)) return uint32_t{0};
-            float wrapped = std::fmod(std::trunc(value), 4294967296.0f);
+
+            // The common LED-animation coordinates fit in int32. Avoid fmod()
+            // for that hot path while retaining wraparound for larger inputs.
+            if (value >= -2147483648.0f && value < 2147483648.0f) {
+                return static_cast<uint32_t>(static_cast<int32_t>(value));
+            }
+
+            float wrapped = std::fmod(value, 4294967296.0f);
             if (wrapped < 0.0f) wrapped += 4294967296.0f;
             return static_cast<uint32_t>(wrapped);
         };
@@ -863,10 +870,11 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
         const uint32_t iy = toUint32(floorY);
         const float fx = x - floorX;
         const float fy = y - floorY;
+        constexpr float inverseUint32Max = 1.0f / 4294967295.0f;
         const auto hash = [](uint32_t a, uint32_t b) {
             uint32_t n = a * 374761393U + b * 668265263U;
             n = (n ^ (n >> 13U)) * 1274126177U;
-            return static_cast<float>(n ^ (n >> 16U)) / 4294967295.0f;
+            return static_cast<float>(n ^ (n >> 16U)) * inverseUint32Max;
         };
         const auto fade = [](float value) { return value * value * (3 - 2 * value); };
         const float a = hash(ix, iy);
