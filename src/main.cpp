@@ -8,6 +8,10 @@
 #include <cstring>
 #include <mutex>
 
+#include <esp_heap_caps.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "device_config.h"
 #include "led/led_output.h"
 #include "runtime/animation_runtime.h"
@@ -155,6 +159,10 @@ bool loadWifiCredentials() {
 
 }  // namespace
 
+// The DSL interpreter uses bounded recursion; 16 KiB leaves headroom for
+// nested expressions while the frame staging buffer itself lives outside the stack.
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
 void setup() {
     Serial.begin(115200);
     delay(50);
@@ -255,6 +263,14 @@ void loop() {
     }
 
     const uint32_t nowMs = millis();
+    static uint32_t lastMemoryDiagnosticsMs = 0;
+    if (nowMs - lastMemoryDiagnosticsMs >= 10000) {
+        lastMemoryDiagnosticsMs = nowMs;
+        Serial.printf("{\"level\":\"debug\",\"component\":\"runtime\",\"stackHighWater\":%u,\"freeHeap\":%u,\"largestFreeBlock\":%u}\n",
+                      static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+                      static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+                      static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+    }
     if (nowMs - fpsWindowStartMs >= 1000) {
         metrics.actualFps = fpsFrameCount * 1000.0f / (nowMs - fpsWindowStartMs);
         fpsWindowStartMs = nowMs;
