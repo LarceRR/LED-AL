@@ -258,8 +258,9 @@ void loop() {
             metrics.lastErrorMessage = error.message;
             metrics.lastErrorLine = error.line;
             metrics.lastErrorColumn = error.column;
-            Serial.printf("{\"level\":\"error\",\"component\":\"runtime\",\"code\":\"%s\",\"message\":\"%s\",\"line\":%u,\"column\":%u}\n",
-                          error.code.c_str(), error.message.c_str(), error.line, error.column);
+            Serial.printf("{\"level\":\"error\",\"component\":\"runtime\",\"code\":\"%s\",\"message\":\"%s\",\"line\":%u,\"column\":%u,\"compute_us\":%lu}\n",
+                          error.code.c_str(), error.message.c_str(), error.line, error.column,
+                          static_cast<unsigned long>(runtime.lastComputeTimeUs()));
         }
     }
 
