@@ -40,7 +40,7 @@ After firmware upload:
 
 Closing the browser does not stop the ESP32 animation. A browser refresh restores local library/editor state but does not automatically restart the program.
 
-FastLED 3.9.15 is used for WS2812B output and selects its ESP32 RMT transport under this ESP32 Arduino Core. The firmware performs current estimation and brightness limiting before handing GRB-ordered frames to FastLED.
+FastLED 3.9.15 is used for WS2812B output and selects its ESP32 RMT transport under this ESP32 Arduino Core. The firmware performs current estimation and brightness limiting before handing GRB-ordered frames to FastLED. The Arduino `loopTask` stack is configured to 16 KiB for the bounded recursive DSL interpreter. The renderer keeps its staging frame outside that stack. DSL numeric calculations use 32-bit floating point, and `array(length, initialValue)` uses compact float storage to keep animation state within the ESP32-WROOM-32 heap.
 
 ## Animation DSL
 
@@ -105,7 +105,8 @@ Settings are validated and clamped by the device. Error responses include `error
 - The Home Wi-Fi panel and serial monitor report the ESP32 disconnect reason and signal at disconnect. `AUTH_EXPIRE` (2) and `AUTH_LEAVE` (3) do not by themselves prove the password is wrong; `AUTH_FAIL` (202) and handshake timeout reasons are more specific authentication clues. For serial diagnostics, open the monitor at 115200 baud and look for `component:"wifi"` events.
 - If a separate runtime asset (not the embedded `index.html`) is missing, run the LittleFS upload command after building and verify the filesystem is mounted in `/api/v1/status`.
 - If no pixels light, verify the selected GPIO, strip direction, common ground, separate supply, level shifter, and strip color order.
-- `OUT_OF_MEMORY` during compilation means the ESP32 could not allocate enough heap for the candidate program; reduce large state arrays or source complexity and retry.
+- `OUT_OF_MEMORY` during compilation reports both free heap and the largest free block. Numeric `array(...)` state uses compact float storage; if allocation still fails, reduce the number/length of state arrays or source complexity.
+- The serial monitor periodically reports `stackHighWater`, `freeHeap`, and `largestFreeBlock` so stack and heap headroom can be checked while an animation runs.
 - `TIME_LIMIT` means one frame exceeded the runtime's execution budget and was discarded; simplify per-pixel expressions, especially nested math, noise calls, and loops. Lowering target FPS does not make an individual frame cheaper.
 - Serial logs run at 115200 baud. Upload and monitor ports are selected on the command line.
 - 60 FPS is a target, not a guarantee. A 300-pixel WS2812B frame needs about 9 ms of raw wire time before reset/latch time and interpretation.
