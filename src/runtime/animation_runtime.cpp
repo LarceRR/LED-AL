@@ -924,6 +924,8 @@ Value callBuiltin(BuiltinId builtin, const std::string& name,
             throw SourceError("UNKNOWN_FUNCTION", "Unknown function: " + name,
                               location.line, location.column);
     }
+}
+
 Value evaluate(const Node& node, Environment& environment, Budget& budget) {
     budget.consume(node.location);
     switch (node.kind) {
