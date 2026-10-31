@@ -765,8 +765,10 @@ void WebServerApp::serveStatic(AsyncWebServerRequest* request) {
 
     // The main application, setup wizard and animation catalogue are firmware assets.
     if (requestedPath == "/examples.json") {
-        AsyncWebServerResponse* response = request->beginResponse_P(
-            STATUS_OK, "application/json; charset=utf-8", web::EXAMPLES_JSON);
+        AsyncWebServerResponse* response = request->beginResponse(
+            STATUS_OK, "application/json; charset=utf-8",
+            reinterpret_cast<const uint8_t*>(web::EXAMPLES_JSON),
+            sizeof(web::EXAMPLES_JSON) - 1);
         if (!response) {
             sendError(request, STATUS_INTERNAL_SERVER_ERROR, "RESPONSE_ERROR",
                       "Could not create the embedded examples response");
@@ -778,8 +780,10 @@ void WebServerApp::serveStatic(AsyncWebServerRequest* request) {
     }
 
     if (requestedPath == "/" || requestedPath == "/index.html") {
-        AsyncWebServerResponse* response = request->beginResponse_P(
-            STATUS_OK, "text/html; charset=utf-8", web::INDEX_HTML);
+        AsyncWebServerResponse* response = request->beginResponse(
+            STATUS_OK, "text/html; charset=utf-8",
+            reinterpret_cast<const uint8_t*>(web::INDEX_HTML),
+            sizeof(web::INDEX_HTML) - 1);
         if (!response) {
             sendError(request, STATUS_INTERNAL_SERVER_ERROR, "RESPONSE_ERROR",
                       "Could not create the embedded index response");
