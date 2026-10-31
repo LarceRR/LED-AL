@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "version.h"
+#include "ledal_embedded_index.h"
 
 namespace ledlab {
 namespace {
@@ -111,26 +112,19 @@ const char* wifiStateName(WifiConnectionState state) {
 WebServerApp::WebServerApp(AnimationRuntime& runtime, LedOutput& leds,
                            DeviceSettings& settings, DeviceMetrics& metrics,
                            WifiCredentials& wifiCredentials,
-                           WifiDiagnostics& wifiDiagnostics)
+                           WifiDiagnostics& wifiDiagnostics,
+                           WifiManager& wifiManager)
     : server_(config::HTTP_PORT), runtime_(runtime), leds_(leds),
       settings_(settings), metrics_(metrics), wifiCredentials_(wifiCredentials),
-      wifiDiagnostics_(wifiDiagnostics) {}
+      wifiDiagnostics_(wifiDiagnostics), wifiManager_(wifiManager) {}
 
-bool WebServerApp::begin() {
+bool WebServerApp::begin(bool filesystemReady) {
+    filesystemReady_ = filesystemReady;
     registerRoutes();
     server_.begin();
     return true;
 }
 
-void WebServerApp::resumeHomeWifi() {
-    if (!wifiScanResumeStation_) return;
-
-    wifiScanResumeStation_ = false;
-    WiFi.setAutoReconnect(true);
-    wifiDiagnostics_.state.store(WifiConnectionState::Connecting);
-    WiFi.begin(wifiCredentials_.ssid, wifiCredentials_.password);
-    Serial.printf("{\"level\":\"info\",\"component\":\"wifi\",\"event\":\"scan_station_resumed\"}\n");
-}
 
 bool WebServerApp::takeStepRequest() {
     const bool requested = stepRequested_;
@@ -248,6 +242,11 @@ void WebServerApp::registerJsonPost(const char* path, size_t maxBodySize,
 }
 
 void WebServerApp::registerRoutes() {
+    server_.on("/examples.json", HTTP_GET,
+               [this](AsyncWebServerRequest* request) {
+        serveStatic(request);
+    });
+
     server_.on("/api/v1/status", HTTP_GET,
                [this](AsyncWebServerRequest* request) {
         std::lock_guard<std::mutex> stateLock(stateMutex_);
@@ -292,17 +291,39 @@ void WebServerApp::registerRoutes() {
         document["settings"]["targetFps"] = settings_.targetFps;
 
         JsonObject wifi = document["wifi"].to<JsonObject>();
-        wifi["mode"] = "AP+STA";
-        wifi["ssid"] = WiFi.softAPSSID();
-        wifi["ip"] = WiFi.softAPIP().toString();
+        const bool apActive = wifiManager_.accessPointActive();
+        wifi["mode"] = apActive
+            ? (WiFi.status() == WL_CONNECTED ? "AP+STA" : "AP")
+            : "STA";
+        wifi["ssid"] = apActive ? WiFi.softAPSSID() : String();
+        wifi["ip"] = apActive
+            ? WiFi.softAPIP().toString()
+            : WiFi.localIP().toString();
+        JsonObject setup = wifi["setup"].to<JsonObject>();
+        setup["active"] = apActive;
+        setup["ssid"] = config::WIFI_SSID;
+        setup["ip"] = WiFi.softAPIP().toString();
+        setup["captivePortal"] = wifiManager_.captivePortalActive();
         JsonObject homeWifi = wifi["home"].to<JsonObject>();
-        homeWifi["configured"] = wifiCredentials_.ssid[0] != '\0';
-        const String savedSsid(wifiCredentials_.ssid);
+        JsonArray savedNetworks = homeWifi["savedNetworks"].to<JsonArray>();
+        bool hasSavedNetworks = false;
+        for (const auto& profile : wifiCredentials_.networks) {
+            if (profile.ssid[0] == '\0') continue;
+            hasSavedNetworks = true;
+            const String profileSsid(profile.ssid);
+            JsonObject saved = savedNetworks.add<JsonObject>();
+            saved["ssid"] = isValidUtf8(profileSsid)
+                ? profileSsid : String("Non-UTF-8 SSID [") + ssidHex(profileSsid) + "]";
+        }
+        homeWifi["configured"] = hasSavedNetworks;
+        const WifiConnectionState state = wifiDiagnostics_.state.load();
+        const String savedSsid = WiFi.status() == WL_CONNECTED
+            ? WiFi.SSID()
+            : String(wifiCredentials_.networks[0].ssid);
         const String savedSsidBytes = ssidHex(savedSsid);
         homeWifi["ssid"] = isValidUtf8(savedSsid)
             ? savedSsid : String("Non-UTF-8 SSID [") + savedSsidBytes + "]";
         homeWifi["ssidHex"] = savedSsidBytes;
-        const WifiConnectionState state = wifiDiagnostics_.state.load();
         homeWifi["connected"] = state == WifiConnectionState::Connected &&
                                 WiFi.status() == WL_CONNECTED;
         homeWifi["status"] = wifiStateName(state);
@@ -313,6 +334,17 @@ void WebServerApp::registerRoutes() {
             ? "" : WiFi.disconnectReasonName(
                 static_cast<wifi_err_reason_t>(disconnectReason));
         homeWifi["ip"] = WiFi.localIP().toString();
+        homeWifi["hostname"] = String(config::MDNS_HOSTNAME) + ".local";
+        homeWifi["mdnsActive"] = wifiManager_.mdnsActive();
+        homeWifi["mdnsUrl"] = wifiManager_.mdnsActive()
+            ? String("http://") + config::MDNS_HOSTNAME + ".local/"
+            : String();
+        JsonObject filesystem = document["filesystem"].to<JsonObject>();
+        filesystem["mounted"] = filesystemReady_;
+        filesystem["embeddedIndexAvailable"] = true;
+        filesystem["embeddedExamplesAvailable"] = true;
+        filesystem["littlefsIndexAvailable"] =
+            filesystemReady_ && LittleFS.exists("/index.html");
         sendJson(request, STATUS_OK, document);
     });
 
@@ -339,8 +371,13 @@ void WebServerApp::registerRoutes() {
         settings["currentLimitMaxMa"] = config::CURRENT_LIMIT_MA_MAX;
         settings["timeScaleMin"] = 0.1;
         settings["timeScaleMax"] = 4.0;
-        document["filesystemTotalBytes"] = LittleFS.totalBytes();
-        document["filesystemUsedBytes"] = LittleFS.usedBytes();
+        document["filesystemMounted"] = filesystemReady_;
+        document["embeddedIndexAvailable"] = true;
+        document["embeddedExamplesAvailable"] = true;
+        document["filesystemIndexAvailable"] =
+            filesystemReady_ && LittleFS.exists("/index.html");
+        document["filesystemTotalBytes"] = filesystemReady_ ? LittleFS.totalBytes() : 0;
+        document["filesystemUsedBytes"] = filesystemReady_ ? LittleFS.usedBytes() : 0;
         sendJson(request, STATUS_OK, document);
     });
 
@@ -355,21 +392,13 @@ void WebServerApp::registerRoutes() {
         }
         wifiScanActive_ = false;
         WiFi.scanDelete();
-        wifiScanResumeStation_ = wifiCredentials_.ssid[0] != '\0';
-        if (wifiScanResumeStation_) {
-            WiFi.setAutoReconnect(false);
-            if (!WiFi.disconnect(false, false)) {
-                resumeHomeWifi();
-                sendError(request, STATUS_INTERNAL_SERVER_ERROR, "WIFI_SCAN_FAILED",
-                          "ESP32 could not pause its home Wi-Fi connection for scanning");
-                return;
-            }
-            delay(150);
-        }
+        wifiManager_.setScanning(true);
         Serial.printf("{\"level\":\"info\",\"component\":\"wifi\",\"event\":\"scan_started\"}\n");
+        // Scanning is asynchronous. Do not deliberately drop STA: the radio driver
+        // returns to the home channel when the scan finishes.
         if (WiFi.scanNetworks(true, true, false, 120) == WIFI_SCAN_FAILED) {
+            wifiManager_.setScanning(false);
             Serial.printf("{\"level\":\"error\",\"component\":\"wifi\",\"event\":\"scan_failed\"}\n");
-            resumeHomeWifi();
             sendError(request, STATUS_INTERNAL_SERVER_ERROR, "WIFI_SCAN_FAILED",
                       "ESP32 could not start a Wi-Fi scan");
             return;
@@ -398,9 +427,9 @@ void WebServerApp::registerRoutes() {
         }
         if (result == WIFI_SCAN_FAILED) {
             wifiScanActive_ = false;
+            wifiManager_.setScanning(false);
             WiFi.scanDelete();
             Serial.printf("{\"level\":\"error\",\"component\":\"wifi\",\"event\":\"scan_failed\"}\n");
-            resumeHomeWifi();
             sendError(request, STATUS_INTERNAL_SERVER_ERROR, "WIFI_SCAN_FAILED",
                       "Wi-Fi scan failed; try again");
             return;
@@ -427,7 +456,7 @@ void WebServerApp::registerRoutes() {
         Serial.printf("{\"level\":\"info\",\"component\":\"wifi\",\"event\":\"scan_complete\",\"networks\":%u}\n",
                       static_cast<unsigned>(networks.size()));
         WiFi.scanDelete();
-        resumeHomeWifi();
+        wifiManager_.setScanning(false);
         sendJson(request, STATUS_OK, response);
     });
 
@@ -450,7 +479,7 @@ void WebServerApp::registerRoutes() {
         }
 
         const String password = document["password"].as<String>();
-        WifiCredentials candidate{};
+        WifiNetworkProfile candidate{};
         if (hasSsidHex) {
             const String encodedSsid = document["ssidHex"].as<String>();
             if (encodedSsid.isEmpty() || encodedSsid.length() > 64 ||
@@ -478,7 +507,7 @@ void WebServerApp::registerRoutes() {
             }
             ssid.toCharArray(candidate.ssid, sizeof(candidate.ssid));
         }
-        if (password.length() > sizeof(WifiCredentials::password) - 1 ||
+        if (password.length() > sizeof(candidate.password) - 1 ||
             (!password.isEmpty() && password.length() < 8)) {
             sendError(request, STATUS_BAD_REQUEST, "INVALID_PASSWORD",
                       "Password must be empty for an open network or 8 to 63 bytes");
@@ -487,35 +516,48 @@ void WebServerApp::registerRoutes() {
 
         password.toCharArray(candidate.password, sizeof(candidate.password));
 
+        // The newest profile becomes primary. Preserve up to two distinct backups.
+        WifiCredentials updated{};
+        updated.networks[0] = candidate;
+        size_t destination = 1;
+        for (const auto& existing : wifiCredentials_.networks) {
+            if (destination >= 3) break;
+            if (existing.ssid[0] == '\0' ||
+                std::strncmp(existing.ssid, candidate.ssid, sizeof(candidate.ssid)) == 0) {
+                continue;
+            }
+            updated.networks[destination++] = existing;
+        }
+
         Preferences preferences;
         if (!preferences.begin("ledlab", false)) {
             sendError(request, STATUS_INTERNAL_SERVER_ERROR, "STORAGE_ERROR",
                       "Could not open Wi-Fi credential storage");
             return;
         }
-        const size_t written = preferences.putBytes("wifi", &candidate, sizeof(candidate));
+        const size_t written = preferences.putBytes("wifi", &updated, sizeof(updated));
         preferences.end();
-        if (written != sizeof(candidate)) {
+        if (written != sizeof(updated)) {
             sendError(request, STATUS_INTERNAL_SERVER_ERROR, "STORAGE_ERROR",
                       "Could not save Wi-Fi credentials");
             return;
         }
 
-        wifiCredentials_ = candidate;
+        wifiCredentials_ = updated;
         wifiDiagnostics_.state.store(WifiConnectionState::Connecting);
         wifiDiagnostics_.disconnectReason.store(0);
         wifiDiagnostics_.disconnectRssi.store(0);
         JsonDocument response;
         response["success"] = true;
         response["status"] = "connecting";
-        const String savedSsid(wifiCredentials_.ssid);
+        const String savedSsid(wifiCredentials_.networks[0].ssid);
         response["ssid"] = isValidUtf8(savedSsid)
             ? savedSsid : String("Non-UTF-8 SSID [") + ssidHex(savedSsid) + "]";
+        response["savedNetworkCount"] = destination;
         sendJson(request, STATUS_ACCEPTED, response);
 
-        WiFi.setAutoReconnect(true);
-        WiFi.disconnect(false, false);
-        WiFi.begin(wifiCredentials_.ssid, wifiCredentials_.password);
+        // Let the accepted response leave before switching the radio to the new network.
+        wifiManager_.requestConnect();
     });
 
     registerJsonPost("/api/v1/animation/compile-run",
@@ -671,6 +713,15 @@ void WebServerApp::registerRoutes() {
     server_.onNotFound([this](AsyncWebServerRequest* request) {
         const String path = request->url();
         if (!path.startsWith("/api/v1/")) {
+            if (wifiManager_.captivePortalActive() &&
+                request->method() == HTTP_GET && path != "/" &&
+                (!filesystemReady_ || !LittleFS.exists(path))) {
+                AsyncWebServerResponse* redirect =
+                    request->beginResponse(302, "text/plain", "Opening LED-AL setup");
+                redirect->addHeader("Location", "/");
+                request->send(redirect);
+                return;
+            }
             serveStatic(request);
             return;
         }
@@ -703,36 +754,71 @@ void WebServerApp::registerRoutes() {
 }
 
 void WebServerApp::serveStatic(AsyncWebServerRequest* request) {
+    const String requestedPath = request->url();
     Serial.printf("{\"level\":\"info\",\"component\":\"http\",\"event\":\"static_request\",\"uri\":\"%s\"}\n",
-                  request->url().c_str());
+                  requestedPath.c_str());
+
     if (request->method() != HTTP_GET) {
         sendError(request, STATUS_NOT_FOUND, "NOT_FOUND", "Resource not found");
         return;
     }
-    String path = request->url();
-    if (path == "/") path = "/index.html";
-    if (path.indexOf("..") >= 0 || path.indexOf('\\') >= 0) {
+
+    // The main application, setup wizard and animation catalogue are firmware assets.
+    if (requestedPath == "/examples.json") {
+        AsyncWebServerResponse* response = request->beginResponse_P(
+            STATUS_OK, "application/json; charset=utf-8", web::EXAMPLES_JSON);
+        if (!response) {
+            sendError(request, STATUS_INTERNAL_SERVER_ERROR, "RESPONSE_ERROR",
+                      "Could not create the embedded examples response");
+            return;
+        }
+        response->addHeader("Cache-Control", "no-cache");
+        request->send(response);
+        return;
+    }
+
+    if (requestedPath == "/" || requestedPath == "/index.html") {
+        AsyncWebServerResponse* response = request->beginResponse_P(
+            STATUS_OK, "text/html; charset=utf-8", web::INDEX_HTML);
+        if (!response) {
+            sendError(request, STATUS_INTERNAL_SERVER_ERROR, "RESPONSE_ERROR",
+                      "Could not create the embedded index response");
+            return;
+        }
+        response->addHeader("Cache-Control", "no-cache");
+        request->send(response);
+        return;
+    }
+
+    if (!filesystemReady_) {
+        sendError(request, STATUS_INTERNAL_SERVER_ERROR, "FILESYSTEM_NOT_MOUNTED",
+                  "LittleFS is not mounted; the embedded application is still available at /");
+        return;
+    }
+
+    if (requestedPath.indexOf("..") >= 0 || requestedPath.indexOf('\\') >= 0) {
         sendError(request, STATUS_BAD_REQUEST, "INVALID_PATH", "Invalid resource path");
         return;
     }
-    File file = LittleFS.open(path, "r");
+
+    File file = LittleFS.open(requestedPath, "r");
     if (!file || file.isDirectory()) {
         sendError(request, STATUS_NOT_FOUND, "NOT_FOUND", "Resource not found");
         return;
     }
     const size_t fileSize = file.size();
     file.close();
+
     AsyncWebServerResponse* response =
-        request->beginResponse(LittleFS, path, mimeType(path));
+        request->beginResponse(LittleFS, requestedPath, mimeType(requestedPath));
     if (!response) {
         sendError(request, STATUS_INTERNAL_SERVER_ERROR, "RESPONSE_ERROR",
                   "Could not create the file response");
         return;
     }
-    response->addHeader("Cache-Control", path == "/index.html"
-        ? "no-cache" : "public, max-age=3600");
+    response->addHeader("Cache-Control", "public, max-age=3600");
     Serial.printf("{\"level\":\"info\",\"component\":\"http\",\"event\":\"static_response_started\",\"uri\":\"%s\",\"bytes\":%u}\n",
-                  path.c_str(), static_cast<unsigned>(fileSize));
+                  requestedPath.c_str(), static_cast<unsigned>(fileSize));
     request->send(response);
 }
 

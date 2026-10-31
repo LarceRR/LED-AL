@@ -132,7 +132,7 @@
         <h1>Animation Lab</h1>
         <div class="subhead">Edit locally, compile on-device, keep animations running without your phone.</div>
       </div>
-      <div class="network-note"><strong>Home Wi-Fi is optional.</strong><br>LED-LAB stays available at 192.168.4.1.</div>
+      <div class="network-note"><strong>Home Wi-Fi is optional.</strong><br>LED-LAB setup returns automatically if the router connection is lost.</div>
     </div>
     <div id="storageNotice" class="notice error" hidden></div>
     <div id="deviceNotice" class="notice" hidden></div>
@@ -194,7 +194,8 @@
           <div class="panel-body">
             <p id="homeWifiState" class="runtime-label" style="margin:0 0 6px">Checking connection…</p>
             <a id="homeWifiAddress" class="wifi-address" hidden></a>
-            <p class="wifi-help" style="margin-bottom:12px">Setup access point: <strong>LED-LAB · 192.168.4.1</strong> (stays available as a fallback).</p>
+            <p id="homeWifiSaved" class="wifi-help" hidden></p>
+            <p class="wifi-help" style="margin-bottom:12px">Setup access point: <strong>LED-LAB · 192.168.4.1</strong> It closes after home Wi-Fi connects and returns automatically if that connection is lost.</p>
             <form id="homeWifiForm" class="wifi-form">
               <div class="wifi-field">
                 <label for="homeWifiSsid">Detected router network (SSID)</label>
@@ -552,7 +553,7 @@
         setText('homeWifiState', 'Enter your home router details to connect.');
       } else if (homeWifi.connected) {
         setText('homeWifiBadge', 'Connected');
-        setText('homeWifiState', `Connected to ${homeWifi.ssid || 'home Wi-Fi'}.`);
+        setText('homeWifiState', `Connected to ${homeWifi.ssid || 'home Wi-Fi'}. The setup network will close shortly; join the same home Wi-Fi and open the address below.`);
       } else {
         const badges = {
           connecting: 'Connecting',
@@ -587,6 +588,15 @@
           : '';
         setText('homeWifiState', `${states[homeWifi.status] || 'Connecting to the saved network…'}${detail}`);
       }
+      const savedNetworkNames = (homeWifi.savedNetworks || []).map(network => network.ssid).filter(Boolean);
+      const savedNetworks = $('homeWifiSaved');
+      if (savedNetworkNames.length) {
+        savedNetworks.textContent = 'Remembered networks (up to 3): ' + savedNetworkNames.join(' · ');
+        savedNetworks.hidden = false;
+      } else {
+        savedNetworks.textContent = '';
+        savedNetworks.hidden = true;
+      }
       const wifiDiagnostic = `${homeWifi.status || ''}:${homeWifi.disconnectReason || 0}`;
       if (homeWifi.configured && homeWifi.status === 'disconnected' &&
           wifiDiagnostic !== lastWifiDiagnostic) {
@@ -604,8 +614,11 @@
       if (homeWifi.ssidHex) $('homeWifiSsid').dataset.savedSsidHex = homeWifi.ssidHex;
       const address = $('homeWifiAddress');
       if (homeWifi.connected && homeWifi.ip && homeWifi.ip !== '0.0.0.0') {
-        address.href = `http://${homeWifi.ip}/`;
-        address.textContent = `Open LED LAB on your home network: http://${homeWifi.ip}`;
+        const target = homeWifi.mdnsActive && homeWifi.mdnsUrl
+          ? homeWifi.mdnsUrl
+          : `http://${homeWifi.ip}/`;
+        address.href = target;
+        address.textContent = `Open LED LAB: ${target} (fallback IP: ${homeWifi.ip})`;
         address.hidden = false;
       } else {
         address.removeAttribute('href');

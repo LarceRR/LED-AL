@@ -13,6 +13,7 @@
 #include "runtime/animation_runtime.h"
 #include "system/device_state.h"
 #include "system/wifi_credentials.h"
+#include "system/wifi_manager.h"
 #include "version.h"
 #include "web/web_server.h"
 
@@ -24,8 +25,9 @@ ledlab::DeviceSettings settings;
 ledlab::DeviceMetrics metrics;
 ledlab::WifiCredentials wifiCredentials;
 ledlab::WifiDiagnostics wifiDiagnostics;
+ledlab::WifiManager wifiManager(wifiCredentials, wifiDiagnostics);
 ledlab::WebServerApp web(runtime, leds, settings, metrics, wifiCredentials,
-                         wifiDiagnostics);
+                         wifiDiagnostics, wifiManager);
 std::array<ledlab::Rgb, ledlab::config::LED_COUNT> frameBuffer{};
 
 void logLine(const char* level, const char* message) {
@@ -67,33 +69,24 @@ void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
                           reason, info.wifi_sta_disconnected.rssi);
             break;
         }
+        case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+            wifiDiagnostics.state.store(ledlab::WifiConnectionState::Disconnected);
+            Serial.printf("{\"level\":\"warning\",\"component\":\"wifi\",\"event\":\"lost_ip\"}\n");
+            break;
         default:
             break;
     }
 }
 
-bool startAccessPoint() {
-    const IPAddress ip(192, 168, 4, 1);
-    const IPAddress gateway(192, 168, 4, 1);
-    const IPAddress subnet(255, 255, 255, 0);
-    WiFi.mode(WIFI_AP_STA);
-    if (!WiFi.setSleep(false)) {
-        logLine("error", "Could not disable Wi-Fi power saving");
-    }
-    if (!WiFi.setTxPower(WIFI_POWER_19_5dBm)) {
-        logLine("error", "Could not set maximum Wi-Fi transmit power");
-    }
-    if (!WiFi.softAPConfig(ip, gateway, subnet)) {
-        logLine("error", "Could not configure access point network");
-        return false;
-    }
-    if (!WiFi.softAP(ledlab::config::WIFI_SSID, ledlab::config::WIFI_PASSWORD)) {
-        logLine("error", "Could not start Wi-Fi access point");
-        return false;
-    }
-    Serial.printf("{\"level\":\"info\",\"component\":\"wifi\",\"ssid\":\"%s\",\"ip\":\"%s\"}\n",
-                  ledlab::config::WIFI_SSID, WiFi.softAPIP().toString().c_str());
-    return true;
+struct LegacyWifiCredentials {
+    char ssid[33]{};
+    char password[64]{};
+};
+
+bool profileIsValid(const ledlab::WifiNetworkProfile& profile) {
+    return profile.ssid[0] != '\0' &&
+           std::memchr(profile.ssid, '\0', sizeof(profile.ssid)) != nullptr &&
+           std::memchr(profile.password, '\0', sizeof(profile.password)) != nullptr;
 }
 
 bool loadWifiCredentials() {
@@ -103,24 +96,59 @@ bool loadWifiCredentials() {
         return false;
     }
 
+    const size_t storedLength = preferences.getBytesLength("wifi");
     bool loaded = false;
-    if (preferences.getBytesLength("wifi") == sizeof(wifiCredentials) &&
-        preferences.getBytes("wifi", &wifiCredentials, sizeof(wifiCredentials)) ==
-            sizeof(wifiCredentials)) {
-        loaded = wifiCredentials.ssid[0] != '\0' &&
-                 std::memchr(wifiCredentials.ssid, '\0',
-                             sizeof(wifiCredentials.ssid)) != nullptr &&
-                 std::memchr(wifiCredentials.password, '\0',
-                             sizeof(wifiCredentials.password)) != nullptr;
+    bool migrated = false;
+
+    if (storedLength == sizeof(ledlab::WifiCredentials)) {
+        ledlab::WifiCredentials stored{};
+        if (preferences.getBytes("wifi", &stored, sizeof(stored)) == sizeof(stored)) {
+            ledlab::WifiCredentials normalized{};
+            size_t destination = 0;
+            for (const auto& profile : stored.networks) {
+                if (destination >= 3) break;
+                if (!profileIsValid(profile)) continue;
+                normalized.networks[destination++] = profile;
+            }
+            wifiCredentials = normalized;
+            loaded = wifiCredentials.networks[0].ssid[0] != '\0';
+        }
+    } else if (storedLength == sizeof(LegacyWifiCredentials)) {
+        LegacyWifiCredentials legacy{};
+        if (preferences.getBytes("wifi", &legacy, sizeof(legacy)) == sizeof(legacy) &&
+            legacy.ssid[0] != '\0' &&
+            std::memchr(legacy.ssid, '\0', sizeof(legacy.ssid)) != nullptr &&
+            std::memchr(legacy.password, '\0', sizeof(legacy.password)) != nullptr) {
+            std::memcpy(wifiCredentials.networks[0].ssid, legacy.ssid,
+                        sizeof(legacy.ssid));
+            std::memcpy(wifiCredentials.networks[0].password, legacy.password,
+                        sizeof(legacy.password));
+            loaded = true;
+            migrated = true;
+        }
+    }
+
+    if (loaded && (migrated ||
+        storedLength != sizeof(ledlab::WifiCredentials))) {
+        const size_t written = preferences.putBytes(
+            "wifi", &wifiCredentials, sizeof(wifiCredentials));
+        if (written != sizeof(wifiCredentials)) {
+            preferences.end();
+            logLine("error", "Could not migrate Wi-Fi credentials to the multi-network format");
+            return false;
+        }
     }
     preferences.end();
 
     if (loaded) {
-        wifiDiagnostics.state.store(ledlab::WifiConnectionState::Connecting);
-        WiFi.setAutoReconnect(true);
-        WiFi.begin(wifiCredentials.ssid, wifiCredentials.password);
-        Serial.printf("{\"level\":\"info\",\"component\":\"wifi\",\"message\":\"Connecting to saved home network\",\"ssid\":\"%s\"}\n",
-                      wifiCredentials.ssid);
+        uint8_t profileCount = 0;
+        for (const auto& profile : wifiCredentials.networks) {
+            if (profile.ssid[0] != '\0') ++profileCount;
+        }
+        Serial.printf("{\"level\":\"info\",\"component\":\"wifi\",\"message\":\"Loaded saved home network profiles\",\"count\":%u,\"primarySsid\":\"%s\"}\n",
+                      profileCount, wifiCredentials.networks[0].ssid);
+    } else if (storedLength != 0) {
+        logLine("warning", "Saved Wi-Fi credentials were invalid or used an unsupported format");
     }
     return loaded;
 }
@@ -139,17 +167,20 @@ void setup() {
         logLine("info", "WS2812B output initialized black");
     }
 
-    startAccessPoint();
     loadWifiCredentials();
-    if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
-        logLine("error", "LittleFS mount failed; web assets are unavailable");
+    if (!wifiManager.begin()) {
+        logLine("error", "Wi-Fi manager initialization failed");
+    }
+    const bool filesystemReady = LittleFS.begin(false, "/littlefs", 10, "littlefs");
+    if (!filesystemReady) {
+        logLine("warning", "LittleFS mount failed; optional filesystem assets are unavailable, but the embedded web app remains available");
     } else {
         Serial.printf("{\"level\":\"info\",\"component\":\"filesystem\",\"totalBytes\":%lu,\"usedBytes\":%lu}\n",
                       static_cast<unsigned long>(LittleFS.totalBytes()),
                       static_cast<unsigned long>(LittleFS.usedBytes()));
     }
     runtime.setTimeScale(settings.timeScale);
-    if (!web.begin()) {
+    if (!web.begin(filesystemReady)) {
         logLine("error", "HTTP server initialization failed");
     } else {
         logLine("info", "HTTP server started on port 80");
@@ -159,6 +190,7 @@ void setup() {
 
 void loop() {
     std::lock_guard<std::mutex> stateLock(web.stateMutex());
+    wifiManager.service();
     runtime.serviceCompile();
 
     static uint32_t lastJobId = 0;

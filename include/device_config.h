@@ -17,6 +17,7 @@ constexpr char WIFI_PASSWORD[] = "ledlab123";
 constexpr char WIFI_IP[] = "192.168.4.1";
 constexpr char WIFI_GATEWAY[] = "192.168.4.1";
 constexpr char WIFI_SUBNET[] = "255.255.255.0";
+constexpr char MDNS_HOSTNAME[] = "ledal";
 constexpr uint16_t HTTP_PORT = 80;
 
 constexpr size_t MAX_SOURCE_BYTES = 16384;
