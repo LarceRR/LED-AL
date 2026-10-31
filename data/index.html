@@ -255,6 +255,8 @@
     let saveTimer = 0;
     let settingsTimer = 0;
     let pollTimer = 0;
+    let deviceRefreshInFlight = false;
+    let compileInFlight = false;
     let lastDeviceError = '';
     let lastWifiDiagnostic = '';
     let lastWifiConnected = false;
@@ -519,7 +521,9 @@
     }
 
     async function api(path, options = {}) {
-      const { timeoutMs = 3500, ...fetchOptions } = options;
+      // Animation frames can keep the main loop busy briefly; tolerate a
+      // transient queue without turning one delayed response into "offline".
+      const { timeoutMs = 8000, ...fetchOptions } = options;
       const response = await fetch(path, {
         ...fetchOptions,
         headers: { 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) },
@@ -674,6 +678,8 @@
       }
     }
     async function refreshDevice() {
+      if (deviceRefreshInFlight) return;
+      deviceRefreshInFlight = true;
       try {
         const [status, caps] = await Promise.all([
           api('/api/v1/status'),
@@ -700,6 +706,8 @@
       } catch (error) {
         setOnline(false);
         if (!pollTimer) log('error', 'DEVICE', error.message);
+      } finally {
+        deviceRefreshInFlight = false;
       }
     }
     async function sendSettings() {
@@ -730,10 +738,13 @@
       settingsTimer = setTimeout(sendSettings, 250);
     }
     async function compileRun() {
+      if (compileInFlight) return;
       clearTimeout(saveTimer);
       saveEditor();
       const animation = current();
       if (!animation || !deviceOnline) return;
+      compileInFlight = true;
+      $('compileButton').disabled = true;
       try {
         const queued = await api('/api/v1/animation/compile-run', {
           method: 'POST',
@@ -757,6 +768,7 @@
         log('error', 'COMPILE', error.message);
         setOnline(false);
       } finally {
+        compileInFlight = false;
         $('compileButton').disabled = !deviceOnline || !current();
       }
     }
