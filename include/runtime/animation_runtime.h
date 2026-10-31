@@ -54,6 +54,7 @@ public:
 private:
     struct Program;
     std::unique_ptr<Program> active_;
+    std::array<Rgb, config::LED_COUNT> workingFrame_{};
     std::string pendingName_;
     std::string pendingSource_;
     RuntimeJob job_;
