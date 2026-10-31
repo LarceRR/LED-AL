@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <esp_heap_caps.h>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -1157,7 +1158,14 @@ void AnimationRuntime::serviceCompile() {
     } catch (const std::bad_alloc&) {
         job_.complete = true;
         job_.success = false;
-        job_.error = RuntimeError{"OUT_OF_MEMORY", "Not enough memory to compile animation", 0, 0};
+        const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        const uint32_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        job_.error = RuntimeError{
+            "OUT_OF_MEMORY",
+            "Not enough memory to compile animation (free " +
+                std::to_string(freeHeap) + " B, largest block " +
+                std::to_string(largestBlock) + " B)",
+            0, 0};
     }
     pendingSource_.clear();
     pendingName_.clear();
